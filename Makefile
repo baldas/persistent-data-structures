@@ -15,25 +15,19 @@ CFLAGS=-std=gnu99
 
 all:	$(BINS)
 
-execute: veryclean $(BINS)
+$(BINS): hash_persistente.c
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+
+execute: clean $(BINS)
 	./$(BINS)
 
-test: veryclean $(BINS)
+test: clean $(BINS)
 	./$(BINS) 10
 
-massive_test: veryclean hash_persistente.c
-	$(CC) hash_persistente.c -o $(BINS)  $(LDFLAGS) -DMASSIVE_TEST
-	$(CC) big_test.c -o big_test
-	./big_test 20
-
-hash_persistente.o: hash_persistente.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-$(BINS):	%:	%.o 
-	$(LINKER) -o $@ $< $(LDFLAGS)
+massive_test: hash_persistente.c clean
+	$(CC) $< -o $(BINS)  $(LDFLAGS) -DMASSIVE_TEST
+	$(CC) multi_test.c -o multi_test
+	./multi_test
 
 clean:
-	rm -f *.o
-
-veryclean:
-	rm -f $(BINS) big_test *.o hash_pool*.obj
+	rm -f $(BINS) make_test hash_pool*.obj
