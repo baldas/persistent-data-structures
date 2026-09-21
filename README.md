@@ -61,6 +61,12 @@ Para compilar os exemplos, é necessário ter instalado o PMDK e os headers da b
 
 Em distribuições Linux, normalmente isso requer a instalação dos pacotes do PMDK ou a compilação do projeto a partir do código-fonte do PMDK.
 
+Exemplo:
+```bash
+sudo apt-get update
+sudo apt-get install libpmemobj-dev
+```
+
 ## Como compilar
 
 Acesse a pasta da estrutura desejada e rode:

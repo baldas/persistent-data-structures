@@ -1,7 +1,3 @@
-
-#
-#
-
 LDFLAGS = -lpmemobj
 
 LINKER=$(CC)
