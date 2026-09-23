@@ -9,6 +9,7 @@
 #include <limits.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 
 // Inclusão da biblioteca para programação em memória persistente (PMDK)
 #include <libpmemobj.h>
@@ -35,34 +36,27 @@ char pool_name[BUFFER_SIZE] = "default";
 
 POBJ_LAYOUT_BEGIN(BTREEPLUS);
   POBJ_LAYOUT_ROOT(BTREEPLUS, struct my_root);
+  POBJ_LAYOUT_TOID(BTREEPLUS, struct array);
   POBJ_LAYOUT_TOID(BTREEPLUS, int);
-  POBJ_LAYOUT_TOID(BTREEPLUS, char);
-  POBJ_LAYOUT_TOID(BTREEPLUS, struct b_tree_plus);
 POBJ_LAYOUT_END(BTREEPLUS);
 
 // Definição das estruturas de dados persistentes.
-// `struct hash` mantém o estado da tabela hash (persistido no pool).
+// `struct array` mantém o estado do array (persistido no pool).
 // - size: número de elementos atualmente marcados como ocupados
 // - max_size: capacidade atual (número de slots)
 // - data: array persistente de inteiros armazenados
-// - occupied: array persistente de flags (char) indicando ocupação
-struct hash {
+struct array {
   int size;
   int max_size;
   TOID(int) data;
-  TOID(char) occupied;
 };
 
-// `my_root` é o root object do pool PMEM e aponta para a tabela hash
+typedef struct array Array;
+
+// `my_root` é o root object do pool PMEM e aponta para o array persistente
 struct my_root {
-  TOID(struct hash) p_hash;
+  TOID(struct array) p_array;
 };
-
-typedef struct array {
-    int size;
-    int max_size;
-    int* data;
-} Array;
 
 typedef struct b_tree {
     int value;
@@ -74,7 +68,7 @@ typedef struct b_tree {
 
 typedef struct {
     struct b_tree* index;
-    struct array* content;
+    TOID(struct array) content;
 } B_tree_plus;
 
 bool init_b_tree(B_tree** root) {
@@ -93,21 +87,29 @@ bool init_b_tree(B_tree** root) {
     return true;
 }
 
-bool init_array(Array** data) {
+bool init_array(PMEMobjpool *pop, TOID(struct array) *p_array) {
 
-    if ((*data) != NULL) {
-        free((*data)->data);
-        free(*data);
-    }
+    TX_BEGIN(pop) {
+        TX_ADD_DIRECT(p_array);
 
-    (*data) = malloc(sizeof(Array));
-    (*data)->size = 0;
-    (*data)->max_size = INITIAL_SIZE;
-    (*data)->data = malloc(INITIAL_SIZE * sizeof(int));
+        *p_array = TX_NEW(struct array);
 
-    for (int i = 0; i < INITIAL_SIZE; i++) {
-        (*data)->data[i] = DEFAULT;
-    }
+        D_RW(*p_array)->size = 0;
+        D_RW(*p_array)->max_size = INITIAL_SIZE;
+        
+        if (lifetime != DEFAULT) {
+            if (lifetime == 0)
+                exit(0);
+            lifetime--;
+        }
+
+        D_RW(*p_array)->data = TX_ALLOC(int, sizeof(int) * D_RO(*p_array)->max_size);
+
+        for (int i = 0; i < D_RO(*p_array)->max_size; i++) {
+            D_RW(D_RW(*p_array)->data)[i] = DEFAULT;
+        }
+
+    } TX_END
 
     return true;
 }
@@ -125,24 +127,38 @@ bool delete_b_tree(B_tree** root) {
     return true;
 }
 
-bool delete_array(Array** array) {
+bool reset_array(PMEMobjpool *pop, TOID(struct array) *array) {
 
-    if ((*array) != NULL) {
-        free((*array)->data);
-        free(*array);
+    if (TOID_IS_NULL(*array)) {
+        return false;
     }
 
-    (*array) = NULL;
+    TX_BEGIN(pop) {
+        TX_ADD_DIRECT(array);
+
+        if (!TOID_IS_NULL(D_RO(*array)->data)) {
+            TX_FREE(D_RW(*array)->data);
+        }
+
+        if (lifetime != DEFAULT) {
+            if (lifetime == 0)
+                exit(0);
+            lifetime--;
+        }
+
+        TX_FREE(*array);
+        *array = TOID_NULL(struct array);
+        
+    } TX_END
+    
+    init_array(pop, array);
+
 
     return true;
 }
 
 bool reset_b_tree(B_tree** root) {
     return delete_b_tree(root) && init_b_tree(root);
-}
-
-bool reset_array(Array** array) {
-    return delete_array(array) && init_array(array);
 }
 
 int get_height(B_tree* root) {
@@ -175,7 +191,7 @@ B_tree* new_subtree(B_tree** root, int height) {
     return *root;
 }
 
-void update_node(B_tree* node, int init_chunk, int end_chunk, Array* array) {
+void update_node(B_tree* node, int init_chunk, int end_chunk, TOID(struct array) array) {
     if (node == NULL) {
         return;
     }
@@ -183,7 +199,7 @@ void update_node(B_tree* node, int init_chunk, int end_chunk, Array* array) {
     int first_chunk = init_chunk;
     int second_chunk = (end_chunk - init_chunk) / 2 + init_chunk;
 
-    node->value = array->data[second_chunk];
+    node->value = D_RO(D_RO(array)->data)[second_chunk];
     node->array_left = first_chunk;
     node->array_right = second_chunk;
     update_node(node->left, first_chunk, second_chunk, array);
@@ -193,7 +209,7 @@ void update_node(B_tree* node, int init_chunk, int end_chunk, Array* array) {
 bool update_b_tree(B_tree_plus* b_tree_plus) {
 
     int height_tree = get_height(b_tree_plus->index);
-    int height_array = b_tree_plus->content->max_size / INITIAL_SIZE;
+    int height_array = D_RO(b_tree_plus->content)->max_size / INITIAL_SIZE;
     int temp = 0;
     while (height_array > 1) {
         height_array /= SIZE_RATE;
@@ -220,7 +236,7 @@ bool update_b_tree(B_tree_plus* b_tree_plus) {
             // Expande a árvore para o tamanho do array, adicionando nós à diagonal direita
             while (height_tree < height_array) {
                 struct b_tree * new_root = malloc(sizeof(B_tree));
-                new_root->value = b_tree_plus->content->data[b_tree_plus->index->array_right * SIZE_RATE];
+                new_root->value = D_RO(D_RO(b_tree_plus->content)->data)[b_tree_plus->index->array_right * SIZE_RATE];
                 new_root->left = b_tree_plus->index;
                 new_subtree(&(new_root->right), height_tree);
                 new_root->array_left = 0;
@@ -233,86 +249,125 @@ bool update_b_tree(B_tree_plus* b_tree_plus) {
     }
     
     //Atualizar dados da árvore com os valores do array
-    update_node(b_tree_plus->index, 0, b_tree_plus->content->max_size, b_tree_plus->content);
+    update_node(b_tree_plus->index, 0, D_RO(b_tree_plus->content)->max_size, b_tree_plus->content);
 
     return true;
 }
 
-bool expand_array(Array* array) {
-    if (array == NULL) {
+bool expand_array(PMEMobjpool *pop, TOID(struct array) array) {
+    if (TOID_IS_NULL(array)) {
         return false;
     }
 
-    float actual_rate = ((float) array->size) / ((float)array->max_size);
+    float actual_rate = ((float) D_RO(array)->size) / ((float)D_RO(array)->max_size);
 
     if (actual_rate < EXPAND_RATE) {
         return false;
     }
 
-    int* temp = malloc(SIZE_RATE * array->max_size * sizeof(int));
+    int* temp = malloc(SIZE_RATE * D_RO(array)->max_size * sizeof(int));
 
-    for (int i = 0; i < array->max_size; i++) {
-        temp[i] = array->data[i];
+    for (int i = 0; i < D_RO(array)->max_size; i++) {
+        temp[i] = D_RO(D_RO(array)->data)[i];
     }
 
-    for (int i = array->max_size; i < array->max_size * SIZE_RATE; i++) {
+    for (int i = D_RO(array)->max_size; i < D_RO(array)->max_size * SIZE_RATE; i++) {
         temp[i] = DEFAULT;
     }
 
-    free(array->data);
-    array->data = temp;
-    array->max_size *= SIZE_RATE;
+    TX_BEGIN(pop) {
+        TX_ADD(array);
+
+        TOID(int) new_data = TX_ALLOC(int, sizeof(int) * D_RO(array)->max_size * SIZE_RATE);
+        pmemobj_memcpy(pop, D_RW(new_data), temp, sizeof(int) * D_RO(array)->max_size * SIZE_RATE, POBJ_FLAG_ZERO);
+        TX_FREE(D_RO(array)->data);
+
+        if (lifetime != DEFAULT) {
+            if (lifetime == 0)
+                exit(0);
+            lifetime--;
+        }
+
+        D_RW(array)->data = new_data;
+        D_RW(array)->max_size *= SIZE_RATE;
+    } TX_END
 
     return true;
 }
 
-bool reduce_array(Array* array) {
+bool reduce_array(PMEMobjpool *pop, TOID(struct array) array) {
 
-    if (array == NULL) {
+    if (TOID_IS_NULL(array)) {
         return false;
     }
 
-    float actual_rate = ((float) array->size) / ((float)array->max_size);
+    float actual_rate = ((float) D_RO(array)->size) / ((float)D_RO(array)->max_size);
 
-    if (actual_rate >= REDUCTION_RATE || array->max_size / SIZE_RATE <= INITIAL_SIZE) {
+    if (actual_rate >= REDUCTION_RATE || D_RO(array)->max_size / SIZE_RATE <= INITIAL_SIZE) {
         return false;
     }
 
-    int* temp = malloc((array->max_size/SIZE_RATE) * sizeof(int));
+    int* temp = malloc((D_RO(array)->max_size/SIZE_RATE) * sizeof(int));
 
-    for (int i = 0; i < array->max_size/SIZE_RATE; i++) {
-        temp[i] = array->data[i];
+    for (int i = 0; i < D_RO(array)->max_size/SIZE_RATE; i++) {
+        temp[i] = D_RO(D_RO(array)->data)[i];
     }
 
-    free(array->data);
-    array->data = temp;
-    array->max_size /= SIZE_RATE;
+    TX_BEGIN(pop) {
+        TX_ADD(array);
+
+        TOID(int) new_data = TX_ALLOC(int, sizeof(int) * D_RO(array)->max_size / SIZE_RATE);
+        pmemobj_memcpy(pop, D_RW(new_data), temp, sizeof(int) * D_RO(array)->max_size / SIZE_RATE, POBJ_FLAG_ZERO);
+        TX_FREE(D_RO(array)->data);
+
+        if (lifetime != DEFAULT) {
+            if (lifetime == 0)
+                exit(0);
+            lifetime--;
+        }
+
+        D_RW(array)->data = new_data;
+        D_RW(array)->max_size /= SIZE_RATE;
+    } TX_END
 
     return true;
 }
 
-bool insert_data(Array* array, int value) {
+//TODO: Remover com menos transações, usando estratégia de deslocamento de blocos, e não elemento a elemento.
+bool insert_data(PMEMobjpool *pop, TOID(struct array) array, int value) {
 
-    expand_array(array);
+    expand_array(pop, array);
 
-    if (array->data[array->max_size-1] != DEFAULT) {
+    if ((D_RO(D_RO(array)->data))[D_RO(array)->max_size-1] != DEFAULT) {
         return false;
     }
 
-    for (int i = 0; i < array->max_size; i++) {
-        if (array->data[i] == DEFAULT) {
-            array->data[i] = value;
-            array->size++;
+    for (int i = 0; i < D_RO(array)->max_size; i++) {
+        if (D_RO(D_RO(array)->data)[i] == DEFAULT) {
+            TX_BEGIN(pop) {
+                TX_ADD(array);
+                D_RW(D_RW(array)->data)[i] = value;
+                if (lifetime != DEFAULT) {
+                    if (lifetime == 0)
+                        exit(0);
+                    lifetime--;
+                }
+                D_RW(array)->size++;
+
+            } TX_END
             return true;
         }
 
-        if (array->data[i] < value) {
+        if (D_RO(D_RO(array)->data)[i] < value) {
             continue;
         }
 
-        if (array->data[i] > value) {
-            int temp = array->data[i];
-            array->data[i] = value;
+        if (D_RO(D_RO(array)->data)[i] > value) {
+            int temp = D_RO(D_RO(array)->data)[i];
+            TX_BEGIN(pop) {
+                TX_ADD(array);
+                D_RW(D_RW(array)->data)[i] = value;
+            } TX_END
             value = temp;
         }
 
@@ -321,50 +376,62 @@ bool insert_data(Array* array, int value) {
     return false;
 }
 
-bool remove_data(Array* array, int value) {
+//TODO: Remover com menos transações, usando estratégia de deslocamento de blocos, e não elemento a elemento.
+bool remove_data(PMEMobjpool *pop, TOID(struct array) array, int value) {
 
-    if (array->data[0] == DEFAULT) {
+    if (D_RO(D_RO(array)->data)[0] == DEFAULT) {
         return false;
     }
 
-    for (int i = 0; i < array->max_size; i++) {
+    for (int i = 0; i < D_RO(array)->max_size; i++) {
 
-        if (array->data[i] < value) {
+        if (D_RO(D_RO(array)->data)[i] < value) {
             continue;
         }
 
-        if (array->data[i] > value || array->data[i] == DEFAULT) {
+        if (D_RO(D_RO(array)->data)[i] > value || D_RO(D_RO(array)->data)[i] == DEFAULT) {
             return false;
         }
 
         int j = i;
-        while (j < array->max_size && array->data[j] == value) {
+        while (j < D_RO(array)->max_size && D_RO(D_RO(array)->data)[j] == value) {
             j++;
         }
 
-        array->size -= (j - i);
+        D_RW(array)->size -= (j - i);
 
-        while (i < j && j < array->max_size) {
-            array->data[i] = array->data[j];
+        while (i < j && j < D_RO(array)->max_size) {
+            TX_BEGIN(pop) {
+                TX_ADD(array);
+                D_RW(D_RW(array)->data)[i] = D_RO(D_RO(array)->data)[j];
+                if (lifetime != DEFAULT) {
+                    if (lifetime == 0)
+                        exit(0);
+                    lifetime--;
+                }
+            } TX_END
             i++;
             j++;
         }
 
-        while (i < array->max_size) {
-            array->data[i] = DEFAULT;
+        while (i < D_RO(array)->max_size) {
+            TX_BEGIN(pop) {
+                TX_ADD(array);
+                D_RW(D_RW(array)->data)[i] = DEFAULT;
+            } TX_END
             i++;
         }
 
     }
 
-    reduce_array(array);
+    reduce_array(pop, array);
 
     return true;
 }
 
 int search_data(B_tree_plus* b_tree_plus, int value) {
 
-    if (b_tree_plus->content->data[0] == DEFAULT) {
+    if (D_RO(D_RO(b_tree_plus->content)->data)[0] == DEFAULT) {
         return INT_MIN;
     }
 
@@ -389,13 +456,13 @@ int search_data(B_tree_plus* b_tree_plus, int value) {
 
     if (current_node->value > value) {
         for (int i = current_node->array_left; i < current_node->array_right; i++) {
-            if (b_tree_plus->content->data[i] == value) {
+            if (D_RO(D_RO(b_tree_plus->content)->data)[i] == value) {
                 return i;
             }
         }
     } else {
         for (int i = current_node->array_right; i < current_node->array_right + INITIAL_SIZE/SIZE_RATE; i++) {
-            if (b_tree_plus->content->data[i] == value) {
+            if (D_RO(D_RO(b_tree_plus->content)->data)[i] == value) {
                 return i;
             }
         }
@@ -404,19 +471,19 @@ int search_data(B_tree_plus* b_tree_plus, int value) {
     return INT_MIN;
 }
 
-bool display_data(Array* array, FILE* output_file) {
+bool display_data(TOID(struct array) array, FILE* output_file) {
 
     int data_chunk = INITIAL_SIZE / SIZE_RATE;
 
-    for (int i = 0; i < array->max_size/data_chunk; i++) {
+    for (int i = 0; i < D_RO(array)->max_size/data_chunk; i++) {
         
         fprintf(output_file, "Chunk %d: [ ", i+1);
 
         for (int j = 0; j < data_chunk; j++) {
-            if (array->data[i*data_chunk+j] == DEFAULT) {
+            if (D_RO(D_RO(array)->data)[i*data_chunk+j] == DEFAULT) {
                 fprintf(output_file, "**");
             } else {
-                fprintf(output_file,"%d", array->data[i*data_chunk+j]);
+                fprintf(output_file,"%d", D_RO(D_RO(array)->data)[i*data_chunk+j]);
             }
 
             if (j+1 < data_chunk) {
@@ -485,18 +552,24 @@ int main(int argc, char *argv[]) {
         /* Abre o pool existente e retorna um ponteiro para o pool */
         pop = pmemobj_open(pool_name, LAYOUT_NAME);
         if (pop == NULL) {
-            perror("pmemobj_open\n");
+            perror("failed to open pmemobj pool\n");
             return 1;
         }
     }
 
     int option, temp;
     char buffer[BUFFER_SIZE];
-    B_tree_plus b_tree_plus;
-    b_tree_plus.index = NULL;
-    b_tree_plus.content = NULL;
-    init_array(&b_tree_plus.content);
+    B_tree_plus b_tree_plus = {NULL, TOID_NULL(struct array)};
+    
+    struct my_root *root = D_RW(POBJ_ROOT(pop, struct my_root));
+    
+    if (TOID_IS_NULL(root->p_array)){
+        init_array(pop, &root->p_array);
+    }
+    b_tree_plus.content = root->p_array;
+    
     init_b_tree(&b_tree_plus.index);
+    update_b_tree(&b_tree_plus);
 
     // Menu de interação
 	while (true) {
@@ -517,7 +590,7 @@ int main(int argc, char *argv[]) {
             }
             printf(")");
         }
-        printf("\n1. Insert data\n2. Remove by value\n3. Search by value\n4. Export B-Tree Plus\n5. Reset B-Tree Plus\n6. Exit\n >> ")
+        printf("\n1. Insert data\n2. Remove by value\n3. Search by value\n4. Export B-Tree Plus\n5. Reset B-Tree Plus\n6. Exit\n >> ");
 		fgets(buffer, BUFFER_SIZE-1, stdin);
         option = atoi(buffer);
 
@@ -528,7 +601,7 @@ int main(int argc, char *argv[]) {
                 printf("Enter data to be inserted: ");
                 fgets(buffer, BUFFER_SIZE-1, stdin);
 
-                if (insert_data(b_tree_plus.content, atoi(buffer))) {
+                if (insert_data(pop, b_tree_plus.content, atoi(buffer))) {
                     printf("Data inserted!");
                 } else {
                     printf("Data not inserted.");
@@ -539,7 +612,7 @@ int main(int argc, char *argv[]) {
             case 2: // Caso da remoção de itens
                 printf("Enter value to be removed: ");
                 fgets(buffer, BUFFER_SIZE-1, stdin);
-                if (remove_data(b_tree_plus.content, atoi(buffer))) {
+                if (remove_data(pop, b_tree_plus.content, atoi(buffer))) {
                     printf("Data removed!");
                 } else {
                     printf("Data not removed.");
@@ -566,9 +639,18 @@ int main(int argc, char *argv[]) {
 
                 if (isalpha(buffer[0])) {
                     FILE* output_file = fopen(strcat(buffer,".txt"),"a+");
+                    time_t currentTime = time(NULL);
+
+                    fprintf(output_file, "Data Ticket - %s\nCurrent data:\n", ctime(&currentTime));
                     display_data(b_tree_plus.content, output_file);
+
+                    fprintf(output_file, "\nCurrent B-Tree:\n");
                     display_b_tree(b_tree_plus.index, output_file);
+
+                    fprintf(output_file, "\n\nExported by B-Tree Plus program.\n");
+                    fprintf(output_file, "----------------------------------------------\n");
                     fclose(output_file);
+
                     printf("B-Tree Plus exported!\n");
                 } else {
                     printf("Failed to export B-Tree Plus!\n");
@@ -576,13 +658,13 @@ int main(int argc, char *argv[]) {
                 break;
 
             case 5: // Caso de reset da árvore
-                reset_array(&b_tree_plus.content);
+                reset_array(pop, &root->p_array);
+                b_tree_plus.content = root->p_array;
                 reset_b_tree(&b_tree_plus.index);
                 printf("\nB-Tree Plus reseted!");
                 break;
 
             case 6: // Caso de saída do programa
-                delete_array(&b_tree_plus.content);
                 delete_b_tree(&b_tree_plus.index);
                 exit(0);
             
