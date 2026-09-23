@@ -1,18 +1,38 @@
+/*
+ * Esta implementação usa uma tabela hash aberta com endereçamento linear em memória RAM.
+ * O objetivo é armazenar registros do tipo DATA em um vetor de ponteiros e manter uma
+ * estrutura auxiliar de ocupação para distinguir posições vazias de posições ocupadas por
+ * itens removidos logicamente.
+ *
+ * A tabela cresce e diminui dinamicamente conforme a taxa de ocupação do hash muda. Quando
+ * a carga se aproxima de 75%, ocorre expansão; quando a carga cai muito abaixo do limite,
+ * ocorre redução. A lógica foi pensada para manter a estrutura balanceada sem perder a
+ * simplicidade de implementação em C.
+ *
+ * A hash organiza os dados em posições calculadas por uma função de espalhamento, e, em
+ * caso de colisão, a busca continua linearmente até encontrar um slot livre ou o elemento
+ * correspondente. O array `occupied` funciona como um marcador de estado de cada posição.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 
-#define BUFFER_SIZE 64
 #define FULL 1.0
 #define EMPTY 0.0
 
+#define BUFFER_SIZE 64
 #define INITIAL_SIZE 8
 #define SIZE_RATE 2
 #define EXPAND_RATE 0.75
 #define REDUCTION_RATE (EXPAND_RATE / SIZE_RATE)
 
-#pragma region DATA
-// Estrutura de dados base (pode ser alterado para criar outros registros para o hash)
+/*
+ * Estrutura de dados base.
+ * Pode ser adaptada para armazenar outros campos ou ponteiros, desde que as funções de
+ * cópia, comparação e limpeza também sejam ajustadas. Neste caso, o registro contém apenas
+ * um inteiro `num`, o que mantém o exemplo simples e didático.
+ */
 typedef struct {
     int num;
 } DATA;
@@ -60,11 +80,18 @@ DATA* add_data(DATA* dest, DATA* origin) {
     }
     return dest;
 }
-#pragma endregion DATA
 
-
-#pragma region HASH
-// Estrutura base do Hash
+/*
+ * Estrutura principal da tabela hash.
+ * - size: quantidade de registros atualmente ativos;
+ * - max_size: capacidade total do vetor;
+ * - data: array de ponteiros para os registros armazenados;
+ * - occupied: flags que indicam se cada posição está ocupada, vazia ou marcada como remoção.
+ *
+ * A tabela funciona como um conjunto de slots, onde cada slot pode apontar para um registro
+ * ou permanecer NULL. O vetor `occupied` separa o conceito de slot "vazio" do slot "ocupado
+ * por um registro removido logicamente".
+ */
 typedef struct {
 
     int size;
@@ -75,7 +102,11 @@ typedef struct {
 
 } HASH;
 
-// Variável global da hash
+/*
+ * Ponteiro global para a tabela hash ativa.
+ * Como a implementação é feita em um único programa interativo, manter a estrutura em uma
+ * variável global simplifica o acesso e a manipulação em todas as funções.
+ */
 HASH* hash = NULL;
 
 /*******Funções nesta região:*******/
@@ -93,17 +124,30 @@ void end_hash();
 void display();
 /**************************************/
 
-// Pode ser trocada por qualquer função de espalhamento (hash)
+/*
+ * Função de espalhamento.
+ * A chave é o valor numérico do registro e o cálculo simples (dado * dado) % max_size
+ * produz um índice inicial para a tabela. Em caso de colisão, a implementação continua
+ * linearmente até encontrar uma posição adequada.
+ */
 int hash_function(DATA* data) {
     return (data->num * data->num) % hash->max_size;
 }
 
-// Taxa de ocupação do Hash
+/*
+ * Retorna a taxa de ocupação da tabela (load factor).
+ * Esse valor é comparado com os limites EXPAND_RATE e REDUCTION_RATE para decidir se a hash
+ * precisa crescer ou diminuir.
+ */
 double hash_rate() {
     return (((double) hash->size) / ((double) hash->max_size)) * FULL;
 }
 
-// Aloca espaco para a hash inicializar
+/*
+ * Inicializa a tabela hash.
+ * Cria o objeto HASH, define a capacidade inicial e aloca os arrays de dados e flags de
+ * ocupação. Todos os slots começam vazios e, assim, prontos para receber registros.
+ */
 void start_hash() {
 
     if (hash == NULL) {
@@ -115,7 +159,12 @@ void start_hash() {
     }
 }
 
-// Expande a hash quando a taxa de ocupação chega na esperada
+/*
+ * Expande a hash quando a carga chega ao limite esperado.
+ * O processo cria um novo vetor de maior capacidade, re-insere todos os elementos ativos na
+ * nova posição e renova o estado de ocupação. Esse passo reduz o número de colisões e evita
+ * que a tabela se torne excessivamente densa.
+ */
 void expand_hash() {
 
     if ((hash != NULL) && (hash_rate() >= EXPAND_RATE)) {
@@ -163,7 +212,12 @@ void expand_hash() {
     }
 }
 
-// Reduz o hash para não ocupar muito espaço (caso haja poucos dados em uso)
+/*
+ * Reduz a tabela quando ela está pouco ocupada.
+ * A estrutura volta para um tamanho menor, preservando os dados existentes e reaproveitando
+ * a mesma estratégia de rehash. Essa operação reduz consumo de memória e mantém a taxa de
+ * ocupação em um intervalo razoável.
+ */
 void reduce_hash() {
 
     if ((hash != NULL) && (hash_rate() < REDUCTION_RATE) && (hash->max_size > INITIAL_SIZE)) {
@@ -211,7 +265,12 @@ void reduce_hash() {
     }
 }
 
-// Insere os dados no hash
+/*
+ * Insere um registro na tabela hash.
+ * Primeiro, a função tenta encontrar um slot livre usando sondagem linear. Quando encontra a
+ * posição correta, o dado é salvo e o contador `size` é atualizado. Se houver necessidade,
+ * a estrutura também dispara a expansão automática.
+ */
 bool insert_data(DATA* data) {
 
     if (hash != NULL) {
@@ -248,7 +307,12 @@ bool insert_data(DATA* data) {
     return false;
 }
 
-// Remove logicamente a posição escolhida no Hash
+/*
+ * Remove logicamente um item em uma posição específica.
+ * Em vez de limpar o dado fisicamente, a flag `occupied` é desativada. A implementação mantém
+ * o valor no vetor para fins de compatibilidade com a sondagem linear, enquanto marca o slot
+ * como removido para a estrutura não considerar aquele item em buscas futuras.
+ */
 bool remove_position(int position) {
 
     if (hash != NULL && (position >=0 && position < hash->max_size)) {
@@ -263,7 +327,12 @@ bool remove_position(int position) {
     return false;
 }
 
-// Remove logicamente todos os itens de mesmo dado no hash
+/*
+ * Remove todas as ocorrências de um valor específico.
+ * A varredura percorre a sequência linear da tabela, identifica os registros iguais ao valor
+ * informado e desativa a flag de ocupação. A redução da estrutura também pode ser executada
+ * após a remoção para manter a carga em faixa desejada.
+ */
 bool remove_data(DATA* data) {
 
     if (hash != NULL) {
@@ -300,7 +369,12 @@ bool remove_data(DATA* data) {
     return false;
 }
 
-// Deleta o dado de uma posição do hash, retirando a informação fisicamente
+/*
+ * Remove fisicamente um dado em uma posição válida.
+ * A função libera a memória do registro e zera o ponteiro do slot. Se o item estava ativo,
+ * também decrementa o contador `size` e tenta reduzir a tabela para manter a ocupação sob
+ * controle.
+ */
 bool delete_data(int position) {
 
     // Se o endereço for válido, é deletado
@@ -320,7 +394,12 @@ bool delete_data(int position) {
     return false;
 }
 
-// Restaura a informação de um campo que removeu apenas logicamente e não a deletou do hash
+/*
+ * Restaura um slot removido logicamente.
+ * Essa operação reativa uma posição que ainda guarda dados válidos, mas foi marcada como
+ * fora de uso. Ela é útil em cenários em que a remoção é apenas lógica e o item pode ser
+ * recuperado sem reconstrução da estrutura.
+ */
 bool restore_position(int position) {
     if ((hash != NULL) && ((position >= 0) && (position < hash->max_size)) && (hash->data[position] != NULL) && (!hash->occupied[position])) {
         hash->occupied[position] = true;
@@ -330,7 +409,12 @@ bool restore_position(int position) {
     return false;
 }
 
-// Procura se há um dado no hash, retornando a primeira posição de ocorrência
+/*
+ * Busca um registro na tabela.
+ * O algoritmo calcula a posição inicial pela função hash, percorre a sequência linear até
+ * encontrar o valor desejado ou um slot vazio, e retorna o índice da primeira ocorrência
+ * válida. Caso o item não exista, retorna -1.
+ */
 int search_data(DATA* data) {
 
     if (hash != NULL) {
@@ -359,7 +443,12 @@ int search_data(DATA* data) {
     return -1;
 }
 
-// Limpa o hash e desaloca seu espaço da memória
+/*
+ * Finaliza a hash e desaloca toda a memória alocada.
+ * O processo percorre todos os slots, libera registros existentes e então libera os vetores
+ * internos e a própria estrutura HASH. Isso evita vazamentos e deixa o estado da aplicação
+ * consistente ao encerrar a execução.
+ */
 void end_hash() {
     if (hash != NULL) {
         
@@ -376,7 +465,12 @@ void end_hash() {
     }
 }
 
-// Imprime o hash na tela, para monitoramento do usuário
+/*
+ * Exibe a tabela hash em linhas agrupadas por blocos de 8 posições.
+ * Cada item é mostrado com a forma [valor] quando ativo ou [!valor] quando marcado como
+ * remoção lógica. O símbolo [*] indica slot vazio. Essa visualização facilita o diagnóstico
+ * do comportamento de colisões e do estado atual da tabela.
+ */
 void display() {
 
     // Percorre as linhas de 8 itens do hash
@@ -407,7 +501,6 @@ void display() {
         printf(" (%d)", (i+1)*INITIAL_SIZE);
     }
 }
-#pragma endregion HASH
 
 int main() {
 

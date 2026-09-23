@@ -1,3 +1,20 @@
+/*
+ * A árvore volátil implementada neste arquivo é uma variação de B+ tree em memória RAM.
+ * Ela combina duas estruturas: um Array linear usado como armazenamento de dados e uma
+ * estrutura em árvore que funciona como índice para facilitar a busca e a organização dos
+ * blocos de informação.
+ *
+ * O array principal armazena valores inteiros em um espaço contíguo, com preenchimento
+ * sequencial e marcadores DEFAULT para posições vazias. A árvore, por sua vez, guarda
+ * valores pivô e intervalos de índice que apontam para faixas do array. Em vez de armazenar
+ * todos os dados em cada nó, a árvore mantém apenas um valor representativo e a faixa de
+ * posições que ele cobre.
+ *
+ * A lógica foi construída para manter o array e a árvore sincronizados: sempre que a tabela
+ * muda de tamanho ou sofre inserção/remoção, o índice é recalculado para refletir as
+ * mudanças no conteúdo principal.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -5,18 +22,33 @@
 
 #define BUFFER_SIZE 64
 #define DEFAULT INT_MIN
-
-#define DATA_SIZE 8
+#define INITIAL_SIZE 8
 #define SIZE_RATE 2
 #define EXPAND_RATE 0.75
 #define REDUCTION_RATE (EXPAND_RATE / SIZE_RATE)
 
+/*
+ * Array em memória: representa o conteúdo bruto da estrutura.
+ * - size: número de elementos válidos armazenados;
+ * - max_size: capacidade atual do array;
+ * - data: vetor dinâmico contendo valores inteiros e marcadores DEFAULT.
+ */
 typedef struct array {
     int size;
     int max_size;
     int* data;
 } Array;
 
+/*
+ * Nó da árvore de índice.
+ * - value: valor pivô que representa um intervalo no array;
+ * - left / right: ponteiros para subárvores;
+ * - array_left / array_right: intervalo da região do array coberta por este nó.
+ *
+ * A ideia é semelhante ao funcionamento de uma árvore de busca binária, porém cada nó
+ * aponta para uma faixa específica do array e não necessariamente para um único valor
+ * isolado.
+ */
 typedef struct b_tree {
     int value;
     struct b_tree* left;
@@ -25,11 +57,21 @@ typedef struct b_tree {
     int array_right;
 } B_tree;
 
+/*
+ * Estrutura principal que conecta a árvore de índice com o conteúdo em array.
+ * - index: raiz da árvore de índice;
+ * - content: referência ao array principal com os valores reais armazenados.
+ */
 typedef struct {
     struct b_tree* index;
     struct array* content;
 } B_tree_plus;
 
+/*
+ * Inicializa a raiz da árvore de índices.
+ * Se a raiz já existir, ela é liberada e recriada para garantir um estado consistente.
+ * O valor DEFAULT indica que o nó ainda não possui pivô definido.
+ */
 bool init_b_tree(B_tree** root) {
 
     if ((*root) != NULL) {
@@ -41,11 +83,17 @@ bool init_b_tree(B_tree** root) {
     (*root)->left = NULL;
     (*root)->right = NULL;
     (*root)->array_left = 0;
-    (*root)->array_right = DATA_SIZE/SIZE_RATE;
+    (*root)->array_right = INITIAL_SIZE/SIZE_RATE;
 
     return true;
 }
 
+/*
+ * Inicializa o array de conteúdo.
+ * O array começa com capacidade INITIAL_SIZE e posições marcadas com DEFAULT.
+ * O objetivo é reservar espaço suficiente para o armazenamento inicial, sem necessidade
+ * de rehash ou reorganização imediata.
+ */
 bool init_array(Array** data) {
 
     if ((*data) != NULL) {
@@ -55,16 +103,21 @@ bool init_array(Array** data) {
 
     (*data) = malloc(sizeof(Array));
     (*data)->size = 0;
-    (*data)->max_size = DATA_SIZE;
-    (*data)->data = malloc(DATA_SIZE * sizeof(int));
+    (*data)->max_size = INITIAL_SIZE;
+    (*data)->data = malloc(INITIAL_SIZE * sizeof(int));
 
-    for (int i = 0; i < DATA_SIZE; i++) {
+    for (int i = 0; i < INITIAL_SIZE; i++) {
         (*data)->data[i] = DEFAULT;
     }
 
     return true;
 }
 
+/*
+ * Libera recursivamente todos os nós da árvore.
+ * É importante desalocar as subárvores antes do nó atual para evitar vazamentos
+ * de memória e ponteiros pendentes.
+ */
 bool delete_b_tree(B_tree** root) {
 
     if ((*root) != NULL) {
@@ -78,6 +131,10 @@ bool delete_b_tree(B_tree** root) {
     return true;
 }
 
+/*
+ * Libera a memória do array e do buffer de dados.
+ * Esse processo remove o vetor e zera o ponteiro da estrutura para evitar uso posterior.
+ */
 bool delete_array(Array** array) {
 
     if ((*array) != NULL) {
@@ -90,6 +147,9 @@ bool delete_array(Array** array) {
     return true;
 }
 
+/*
+ * Funções de reset para reaproveitar uma estrutura já alocada.
+ */
 bool reset_b_tree(B_tree** root) {
     return delete_b_tree(root) && init_b_tree(root);
 }
@@ -98,6 +158,11 @@ bool reset_array(Array** array) {
     return delete_array(array) && init_array(array);
 }
 
+/*
+ * Calcula a altura da árvore de índices.
+ * A altura é usada para manter a árvore em equilíbrio com o tamanho do array e garantir
+ * que as faixas cobertas pelo índice estejam em correspondência com a estrutura física.
+ */
 int get_height(B_tree* root) {
     if (root == NULL) {
         return 0;
@@ -113,6 +178,11 @@ int get_height(B_tree* root) {
     }
 }
 
+/*
+ * Cria uma subárvore vazia com a altura especificada.
+ * É útil quando a árvore precisa crescer para acompanhar a expansão do array.
+ * Os elementos abaixo do valor DEFAULT marcam os nós como vazios.
+ */
 B_tree* new_subtree(B_tree** root, int height) {
 
     if (height <= 0) {
@@ -128,6 +198,11 @@ B_tree* new_subtree(B_tree** root, int height) {
     return *root;
 }
 
+/*
+ * Atualiza o valor e os intervalos de um nó com base em um trecho do array.
+ * Essa função percorre a árvore inteira e define, para cada nó, o pivô correspondente ao
+ * elemento central do intervalo em questão.
+ */
 void update_node(B_tree* node, int init_chunk, int end_chunk, Array* array) {
     if (node == NULL) {
         return;
@@ -143,10 +218,19 @@ void update_node(B_tree* node, int init_chunk, int end_chunk, Array* array) {
     update_node(node->right, second_chunk, end_chunk, array);
 }
 
+/*
+ * Sincroniza a árvore de índices com o array principal.
+ * O cálculo da altura considera o espaço físico do array e a taxa de expansão/redução do
+ * armazenamento. Quando a árvore está maior que o conteúdo, ela é encurtada; quando está
+ * menor, ela é expandida.
+ *
+ * A estrutura funciona como um índice estrutural: os nós intermediários armazenam pivôs e
+ * limites de intervalo, enquanto as folhas representam as regiões finais do array.
+ */
 bool update_b_tree(B_tree_plus* b_tree_plus) {
 
     int height_tree = get_height(b_tree_plus->index);
-    int height_array = b_tree_plus->content->max_size / DATA_SIZE;
+    int height_array = b_tree_plus->content->max_size / INITIAL_SIZE;
     int temp = 0;
     while (height_array > 1) {
         height_array /= SIZE_RATE;
@@ -185,12 +269,17 @@ bool update_b_tree(B_tree_plus* b_tree_plus) {
         }
     }
     
-    //Atualizar dados da árvore com os valores do array
+    // Atualiza os dados da árvore com os valores do array
     update_node(b_tree_plus->index, 0, b_tree_plus->content->max_size, b_tree_plus->content);
 
     return true;
 }
 
+/*
+ * Expande o array quando a taxa de ocupação chega ao limite definido.
+ * O vetor original é duplicado para um novo bloco de memória, preservando os valores atuais
+ * e preenchendo as novas posições com DEFAULT.
+ */
 bool expand_array(Array* array) {
     if (array == NULL) {
         return false;
@@ -219,6 +308,10 @@ bool expand_array(Array* array) {
     return true;
 }
 
+/*
+ * Reduz o tamanho do array quando ele está pouco preenchido.
+ * Essa operação economiza memória e mantém a taxa de ocupação dentro de limites esperados.
+ */
 bool reduce_array(Array* array) {
 
     if (array == NULL) {
@@ -227,7 +320,7 @@ bool reduce_array(Array* array) {
 
     float actual_rate = ((float) array->size) / ((float)array->max_size);
 
-    if (actual_rate >= REDUCTION_RATE || array->max_size / SIZE_RATE <= DATA_SIZE) {
+    if (actual_rate >= REDUCTION_RATE || array->max_size / SIZE_RATE <= INITIAL_SIZE) {
         return false;
     }
 
@@ -244,6 +337,11 @@ bool reduce_array(Array* array) {
     return true;
 }
 
+/*
+ * Insere um valor no array mantendo a ordenação crescente.
+ * A função primeiro expande o vetor se necessário, depois desloca elementos maiores para a
+ * direita até encontrar a posição correta. A inserção sempre preserva o array ordenado.
+ */
 bool insert_data(Array* array, int value) {
 
     expand_array(array);
@@ -274,6 +372,12 @@ bool insert_data(Array* array, int value) {
     return false;
 }
 
+/*
+ * Remove um valor do array.
+ * A lógica faz uma varredura sequencial para localizar o valor alvo, desloca os elementos
+ * restantes para preencher o espaço e, em seguida, marca as posições finais como DEFAULT.
+ * Depois da remoção, há uma tentativa de redução do array para economizar memória.
+ */
 bool remove_data(Array* array, int value) {
 
     if (array->data[0] == DEFAULT) {
@@ -315,6 +419,12 @@ bool remove_data(Array* array, int value) {
     return true;
 }
 
+/*
+ * Busca um valor na estrutura B+.
+ * O algoritmo percorre a árvore de índices para descer até uma folha, depois verifica a
+ * faixa de valores correspondentes ao nó. Quando encontra o valor, retorna a posição no
+ * array como índice de conteúdo.
+ */
 int search_data(B_tree_plus* b_tree_plus, int value) {
 
     if (b_tree_plus->content->data[0] == DEFAULT) {
@@ -347,7 +457,7 @@ int search_data(B_tree_plus* b_tree_plus, int value) {
             }
         }
     } else {
-        for (int i = current_node->array_right; i < current_node->array_right + DATA_SIZE/SIZE_RATE; i++) {
+        for (int i = current_node->array_right; i < current_node->array_right + INITIAL_SIZE/SIZE_RATE; i++) {
             if (b_tree_plus->content->data[i] == value) {
                 return i;
             }
@@ -357,9 +467,14 @@ int search_data(B_tree_plus* b_tree_plus, int value) {
     return INT_MIN;
 }
 
+/*
+ * Exibe o array em blocos, separando cada faixa por chunk.
+ * O objetivo é facilitar a visualização dos intervalos e a comparação com os limites
+ * definidos pela árvore de índices.
+ */
 bool display_data(Array* array) {
 
-    int data_chunk = DATA_SIZE / SIZE_RATE;
+    int data_chunk = INITIAL_SIZE / SIZE_RATE;
 
     for (int i = 0; i < array->max_size/data_chunk; i++) {
         
@@ -383,6 +498,11 @@ bool display_data(Array* array) {
     return true;
 }
 
+/*
+ * Exibe os nós da árvore de índice.
+ * Cada linha apresenta o valor do nó e os intervalos de array que ele representa.
+ * Os nós vazios são mostrados com `**`, indicando ausência de pivô.
+ */
 bool display_b_tree(B_tree* root) {
 
     if (root == NULL) {
