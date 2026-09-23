@@ -1,15 +1,62 @@
+// Árvore B+ persistente em C usando libpmemobj (Kit de Desenvolvimento de Memória Persistente - PMDK)
+// Este arquivo implementa uma árvore b+ aberta com busca binária
+// e armazenamento persistente via libpmemobj. Comentários adicionados
+// para explicar as principais seções e funções do código.
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <limits.h>
+#include <string.h>
+#include <ctype.h>
 
+// Inclusão da biblioteca para programação em memória persistente (PMDK)
+#include <libpmemobj.h>
+
+// Configurações de buffers e da árvore b+
 #define BUFFER_SIZE 64
 #define DEFAULT INT_MIN
-
-#define DATA_SIZE 8
+#define INITIAL_SIZE 8
 #define SIZE_RATE 2
 #define EXPAND_RATE 0.75
 #define REDUCTION_RATE (EXPAND_RATE / SIZE_RATE)
+
+// Configurações do pool persistente
+#define LAYOUT_NAME "BTREEPLUS"
+#define KB 1024ULL
+#define MB (1024ULL * KB)
+#define GB (1024ULL * MB)
+#define POOL_SIZE PMEMOBJ_MIN_POOL
+#define POOL_NAME "tree_plus_pool"
+
+// Inicialização de variáveis e do pool
+int lifetime = DEFAULT;
+char pool_name[BUFFER_SIZE] = "default";
+
+POBJ_LAYOUT_BEGIN(BTREEPLUS);
+  POBJ_LAYOUT_ROOT(BTREEPLUS, struct my_root);
+  POBJ_LAYOUT_TOID(BTREEPLUS, int);
+  POBJ_LAYOUT_TOID(BTREEPLUS, char);
+  POBJ_LAYOUT_TOID(BTREEPLUS, struct b_tree_plus);
+POBJ_LAYOUT_END(BTREEPLUS);
+
+// Definição das estruturas de dados persistentes.
+// `struct hash` mantém o estado da tabela hash (persistido no pool).
+// - size: número de elementos atualmente marcados como ocupados
+// - max_size: capacidade atual (número de slots)
+// - data: array persistente de inteiros armazenados
+// - occupied: array persistente de flags (char) indicando ocupação
+struct hash {
+  int size;
+  int max_size;
+  TOID(int) data;
+  TOID(char) occupied;
+};
+
+// `my_root` é o root object do pool PMEM e aponta para a tabela hash
+struct my_root {
+  TOID(struct hash) p_hash;
+};
 
 typedef struct array {
     int size;
@@ -41,7 +88,7 @@ bool init_b_tree(B_tree** root) {
     (*root)->left = NULL;
     (*root)->right = NULL;
     (*root)->array_left = 0;
-    (*root)->array_right = DATA_SIZE/SIZE_RATE;
+    (*root)->array_right = INITIAL_SIZE/SIZE_RATE;
 
     return true;
 }
@@ -55,10 +102,10 @@ bool init_array(Array** data) {
 
     (*data) = malloc(sizeof(Array));
     (*data)->size = 0;
-    (*data)->max_size = DATA_SIZE;
-    (*data)->data = malloc(DATA_SIZE * sizeof(int));
+    (*data)->max_size = INITIAL_SIZE;
+    (*data)->data = malloc(INITIAL_SIZE * sizeof(int));
 
-    for (int i = 0; i < DATA_SIZE; i++) {
+    for (int i = 0; i < INITIAL_SIZE; i++) {
         (*data)->data[i] = DEFAULT;
     }
 
@@ -146,7 +193,7 @@ void update_node(B_tree* node, int init_chunk, int end_chunk, Array* array) {
 bool update_b_tree(B_tree_plus* b_tree_plus) {
 
     int height_tree = get_height(b_tree_plus->index);
-    int height_array = b_tree_plus->content->max_size / DATA_SIZE;
+    int height_array = b_tree_plus->content->max_size / INITIAL_SIZE;
     int temp = 0;
     while (height_array > 1) {
         height_array /= SIZE_RATE;
@@ -227,7 +274,7 @@ bool reduce_array(Array* array) {
 
     float actual_rate = ((float) array->size) / ((float)array->max_size);
 
-    if (actual_rate >= REDUCTION_RATE || array->max_size / SIZE_RATE <= DATA_SIZE) {
+    if (actual_rate >= REDUCTION_RATE || array->max_size / SIZE_RATE <= INITIAL_SIZE) {
         return false;
     }
 
@@ -347,7 +394,7 @@ int search_data(B_tree_plus* b_tree_plus, int value) {
             }
         }
     } else {
-        for (int i = current_node->array_right; i < current_node->array_right + DATA_SIZE/SIZE_RATE; i++) {
+        for (int i = current_node->array_right; i < current_node->array_right + INITIAL_SIZE/SIZE_RATE; i++) {
             if (b_tree_plus->content->data[i] == value) {
                 return i;
             }
@@ -357,50 +404,91 @@ int search_data(B_tree_plus* b_tree_plus, int value) {
     return INT_MIN;
 }
 
-bool display_data(Array* array) {
+bool display_data(Array* array, FILE* output_file) {
 
-    int data_chunk = DATA_SIZE / SIZE_RATE;
+    int data_chunk = INITIAL_SIZE / SIZE_RATE;
 
     for (int i = 0; i < array->max_size/data_chunk; i++) {
         
-        printf("Chunk %d: [ ", i+1);
+        fprintf(output_file, "Chunk %d: [ ", i+1);
 
         for (int j = 0; j < data_chunk; j++) {
             if (array->data[i*data_chunk+j] == DEFAULT) {
-                printf("**");
+                fprintf(output_file, "**");
             } else {
-                printf("%d", array->data[i*data_chunk+j]);
+                fprintf(output_file,"%d", array->data[i*data_chunk+j]);
             }
 
             if (j+1 < data_chunk) {
-                printf(" ");
+                fprintf(output_file, " ");
             }
         }
 
-        printf(" ]\n");
+        fprintf(output_file, " ]\n");
     }
 
     return true;
 }
 
-bool display_b_tree(B_tree* root) {
+bool display_b_tree(B_tree* root, FILE* output_file) {
 
     if (root == NULL) {
         return false;
     }
 
-    display_b_tree(root->left);
-    display_b_tree(root->right);
+    display_b_tree(root->left, output_file);
+    display_b_tree(root->right, output_file);
     if (root->value != DEFAULT) {
-        printf("Node value: %d, Array left: %d, Array right: %d\n", root->value, root->array_left, root->array_right);
+        fprintf(output_file, "Node value: %d, Array left: %d, Array right: %d\n", root->value, root->array_left, root->array_right);
     } else {
-        printf("Node value: **, Array left: %d, Array right: %d\n", root->array_left, root->array_right);
+        fprintf(output_file, "Node value: **, Array left: %d, Array right: %d\n", root->array_left, root->array_right);
     }
 
     return true;
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+
+    #ifdef MASSIVE_TEST
+
+        #ifdef _WIN32
+            const char *null_device = "NUL";
+        #else
+            const char *null_device = "/dev/null";
+        #endif
+
+        if (freopen(null_device, "w", stdout) == NULL) {
+            perror("Erro ao redirecionar stdout");
+            return 1;
+        }
+    #endif
+
+    switch (argc) {
+        case 1: break;
+        case 2: lifetime = atoi(argv[1]); break;
+        case 3:
+            lifetime = atoi(argv[1]);
+
+            strcpy(pool_name, POOL_NAME);
+            if (strlen(argv[2]) > (BUFFER_SIZE - strlen(pool_name) - 5))
+                argv[2][BUFFER_SIZE - strlen(pool_name) - 5] = '\0';
+
+            strcat(pool_name, argv[2]);
+            break;
+        default:
+            perror("Try to use less arguments.\n");
+            return 1;
+    }
+
+    PMEMobjpool *pop = pmemobj_create(strcat(pool_name, ".obj"), LAYOUT_NAME, POOL_SIZE, 0666);
+    if (pop == NULL) {
+        /* Abre o pool existente e retorna um ponteiro para o pool */
+        pop = pmemobj_open(pool_name, LAYOUT_NAME);
+        if (pop == NULL) {
+            perror("pmemobj_open\n");
+            return 1;
+        }
+    }
 
     int option, temp;
     char buffer[BUFFER_SIZE];
@@ -413,11 +501,23 @@ int main() {
     // Menu de interação
 	while (true) {
         printf("\n\nCurrent data:\n");
-		display_data(b_tree_plus.content);
+		display_data(b_tree_plus.content, stdout);
         printf("\nCurrent B-Tree:\n");
-        display_b_tree(b_tree_plus.index);
+        display_b_tree(b_tree_plus.index, stdout);
 
-		printf("\n\nEnter your choice:\n1. Insert data\n2. Remove by value\n3. Search by value\n4. Reset B-Tree Plus\n5. Exit\n >> ");
+		printf("\n\nEnter your choice:");
+        if (lifetime >=0) {
+            printf(" (");
+            switch (lifetime) {
+                case 0: printf("- - -"); break;
+                case 1: printf("█ - -"); break;
+                case 2: printf("█ █ -"); break;
+                case 3: printf("█ █ █"); break;
+                default: printf("%dx █",lifetime);
+            }
+            printf(")");
+        }
+        printf("\n1. Insert data\n2. Remove by value\n3. Search by value\n4. Export B-Tree Plus\n5. Reset B-Tree Plus\n6. Exit\n >> ")
 		fgets(buffer, BUFFER_SIZE-1, stdin);
         option = atoi(buffer);
 
@@ -457,13 +557,31 @@ int main() {
                 }
                 break;
 
-            case 4: // Caso de reset da árvore
+            case 4: // Caso de exportação da árvore
+                printf("Enter file name to be added: ");
+                fgets(buffer, BUFFER_SIZE-1, stdin);
+
+                buffer[strcspn(buffer, "\n")] = '\0';
+                buffer[BUFFER_SIZE-5] = '\0';
+
+                if (isalpha(buffer[0])) {
+                    FILE* output_file = fopen(strcat(buffer,".txt"),"a+");
+                    display_data(b_tree_plus.content, output_file);
+                    display_b_tree(b_tree_plus.index, output_file);
+                    fclose(output_file);
+                    printf("B-Tree Plus exported!\n");
+                } else {
+                    printf("Failed to export B-Tree Plus!\n");
+                }
+                break;
+
+            case 5: // Caso de reset da árvore
                 reset_array(&b_tree_plus.content);
                 reset_b_tree(&b_tree_plus.index);
                 printf("\nB-Tree Plus reseted!");
                 break;
 
-            case 5: // Caso de saída do programa
+            case 6: // Caso de saída do programa
                 delete_array(&b_tree_plus.content);
                 delete_b_tree(&b_tree_plus.index);
                 exit(0);
