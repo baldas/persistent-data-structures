@@ -470,7 +470,7 @@ void reset_hash(PMEMobjpool *pop, struct my_root * root) {
     if (lifetime != DEFAULT) {
       if (lifetime == 0)
       exit(0);
-    lifetime--;
+      lifetime--;
     }
   
     TX_FREE(root->p_hash);
