@@ -1,7 +1,12 @@
 // Árvore B+ persistente em C usando libpmemobj (Kit de Desenvolvimento de Memória Persistente - PMDK)
-// Este arquivo implementa uma árvore b+ aberta com busca binária
-// e armazenamento persistente via libpmemobj. Comentários adicionados
-// para explicar as principais seções e funções do código.
+// Este arquivo implementa uma árvore B+ em memória persistente, organizada como
+// uma estrutura de índices com acesso por faixas do array persistente. A árvore
+// é usada para localizar intervalos de valores em um vetor ordenado, reduzindo a
+// busca linear ao longo da estrutura de índices.
+//
+// O projeto mantém o estado principal em objetos PMDK e usa transações
+// (`TX_BEGIN` / `TX_END`) para garantir consistência persistente em um pool
+// persistente do tipo libpmemobj.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +19,7 @@
 // Inclusão da biblioteca para programação em memória persistente (PMDK)
 #include <libpmemobj.h>
 
-// Configurações de buffers e da árvore b+
+// Configurações de buffers e da árvore B+
 #define BUFFER_SIZE 64
 #define DEFAULT INT_MIN
 #define INITIAL_SIZE 8
@@ -41,9 +46,9 @@ POBJ_LAYOUT_BEGIN(BTREEPLUS);
 POBJ_LAYOUT_END(BTREEPLUS);
 
 // Definição das estruturas de dados persistentes.
-// `struct array` mantém o estado do array (persistido no pool).
-// - size: número de elementos atualmente marcados como ocupados
-// - max_size: capacidade atual (número de slots)
+// `struct array` mantém o estado do array persistente armazenado no pool.
+// - size: número de elementos atualmente ocupados
+// - max_size: capacidade atual do array
 // - data: array persistente de inteiros armazenados
 struct array {
   int size;
@@ -54,10 +59,18 @@ struct array {
 typedef struct array Array;
 
 // `my_root` é o root object do pool PMEM e aponta para o array persistente
+// que guarda os dados da árvore B+.
 struct my_root {
   TOID(struct array) p_array;
 };
 
+// `B_tree` representa um nó da árvore de índices B+.
+// - value: valor usado para particionar o intervalo de dados
+// - left/right: subárvores esquerda e direita
+// - array_left/array_right: faixa do array associada ao nó
+//
+// A árvore não armazena todos os dados diretamente; ela organiza índices que
+// apontam para blocos do array persistente.
 typedef struct b_tree {
     int value;
     struct b_tree* left;
@@ -66,11 +79,16 @@ typedef struct b_tree {
     int array_right;
 } B_tree;
 
+// `B_tree_plus` é o conjunto formado pela árvore de índices e pelo array
+// persistente que contém os dados reais.
 typedef struct {
     struct b_tree* index;
     TOID(struct array) content;
 } B_tree_plus;
 
+// Inicializa a árvore de índices em memória volátil.
+// A subárvore é criada com um nó raiz contendo `DEFAULT` e com faixas vazias
+// inicializadas para o primeiro bloco de dados.
 bool init_b_tree(B_tree** root) {
 
     if ((*root) != NULL) {
@@ -87,6 +105,9 @@ bool init_b_tree(B_tree** root) {
     return true;
 }
 
+// Cria o array persistente que armazenará os dados da árvore B+.
+// Cada slot do array começa com o valor `DEFAULT`, indicando ausência de dado.
+// A estrutura também mantém o controle do tamanho atual e da capacidade total.
 bool init_array(PMEMobjpool *pop, TOID(struct array) *p_array) {
 
     TX_BEGIN(pop) {
@@ -114,6 +135,8 @@ bool init_array(PMEMobjpool *pop, TOID(struct array) *p_array) {
     return true;
 }
 
+// Libera recursivamente todos os nós da árvore de índices em memória volátil.
+// A função percorre a árvore em pós-ordem para remover os filhos antes do pai.
 bool delete_b_tree(B_tree** root) {
 
     if ((*root) != NULL) {
@@ -127,6 +150,8 @@ bool delete_b_tree(B_tree** root) {
     return true;
 }
 
+// Recria o array persistente removendo o objeto antigo e inicializando um novo.
+// Esse comportamento é usado quando o usuário solicita reset do conjunto B+.
 bool reset_array(PMEMobjpool *pop, TOID(struct array) *array) {
 
     if (TOID_IS_NULL(*array)) {
@@ -153,14 +178,17 @@ bool reset_array(PMEMobjpool *pop, TOID(struct array) *array) {
     
     init_array(pop, array);
 
-
     return true;
 }
 
+// Reinicializa a árvore de índices para um estado base sem remover a estrutura
+// de dados persistente.
 bool reset_b_tree(B_tree** root) {
     return delete_b_tree(root) && init_b_tree(root);
 }
 
+// Calcula a altura da árvore de índices, usada para comparar a altura da árvore
+// com o tamanho do array persistente durante expansões e reduções.
 int get_height(B_tree* root) {
     if (root == NULL) {
         return 0;
@@ -176,6 +204,8 @@ int get_height(B_tree* root) {
     }
 }
 
+// Cria uma subárvore vazia com altura `height`.
+// Os nós internos recebem `DEFAULT` em valor e intervalos sem associação.
 B_tree* new_subtree(B_tree** root, int height) {
 
     if (height <= 0) {
@@ -191,6 +221,9 @@ B_tree* new_subtree(B_tree** root, int height) {
     return *root;
 }
 
+// Atualiza os valores e intervalos de cada nó a partir do array persistente.
+// `init_chunk` e `end_chunk` delimitam a faixa do array que cada subárvore
+// representa.
 void update_node(B_tree* node, int init_chunk, int end_chunk, TOID(struct array) array) {
     if (node == NULL) {
         return;
@@ -206,6 +239,9 @@ void update_node(B_tree* node, int init_chunk, int end_chunk, TOID(struct array)
     update_node(node->right, second_chunk, end_chunk, array);
 }
 
+// Reconcilia a árvore de índices com o tamanho e conteúdo do array persistente.
+// Se a árvore estiver maior/menor do que o volume de dados, ela é expandida ou
+// reduzida para manter as faixas dos nós consistentes com o array.
 bool update_b_tree(B_tree_plus* b_tree_plus) {
 
     int height_tree = get_height(b_tree_plus->index);
@@ -254,6 +290,9 @@ bool update_b_tree(B_tree_plus* b_tree_plus) {
     return true;
 }
 
+// Expande o array persistente quando a taxa de ocupação atingir o limite
+// configurado em `EXPAND_RATE`.
+// O redimensionamento preserva os dados anteriores e acrescenta slots vazios.
 bool expand_array(PMEMobjpool *pop, TOID(struct array) array) {
     if (TOID_IS_NULL(array)) {
         return false;
@@ -295,6 +334,8 @@ bool expand_array(PMEMobjpool *pop, TOID(struct array) array) {
     return true;
 }
 
+// Reduz o array persistente quando a taxa de ocupação cair abaixo de
+// `REDUCTION_RATE`, preservando apenas o espaço necessário.
 bool reduce_array(PMEMobjpool *pop, TOID(struct array) array) {
 
     if (TOID_IS_NULL(array)) {
@@ -333,7 +374,9 @@ bool reduce_array(PMEMobjpool *pop, TOID(struct array) array) {
     return true;
 }
 
-//TODO: Remover com menos transações, usando estratégia de deslocamento de blocos, e não elemento a elemento.
+// Insere um novo valor no array persistente, mantendo o vetor ordenado.
+// A função usa o valor `DEFAULT` como marca de slot vazio e reorganiza os itens
+// à medida que a inserção ocorre.
 bool insert_data(PMEMobjpool *pop, TOID(struct array) array, int value) {
 
     expand_array(pop, array);
@@ -342,11 +385,17 @@ bool insert_data(PMEMobjpool *pop, TOID(struct array) array, int value) {
         return false;
     }
 
+    int* temp = malloc(D_RO(array)->max_size * sizeof(int));
     for (int i = 0; i < D_RO(array)->max_size; i++) {
         if (D_RO(D_RO(array)->data)[i] == DEFAULT) {
+            temp[i] = value;
+
+            // Copia o array auxiliar para o array persistente, somente até o índice i
             TX_BEGIN(pop) {
+                TX_ADD(D_RW(array)->data);
                 TX_ADD(array);
-                D_RW(D_RW(array)->data)[i] = value;
+
+                pmemobj_memcpy(pop, D_RW(D_RW(array)->data), temp, (i+1) * sizeof(int), POBJ_FLAG_ZERO);
                 if (lifetime != DEFAULT) {
                     if (lifetime == 0)
                         exit(0);
@@ -355,41 +404,43 @@ bool insert_data(PMEMobjpool *pop, TOID(struct array) array, int value) {
                 D_RW(array)->size++;
 
             } TX_END
+
+            free(temp);
             return true;
         }
 
         if (D_RO(D_RO(array)->data)[i] < value) {
+            temp[i] = D_RO(D_RO(array)->data)[i];
             continue;
         }
 
-        if (D_RO(D_RO(array)->data)[i] > value) {
-            int temp = D_RO(D_RO(array)->data)[i];
-            TX_BEGIN(pop) {
-                TX_ADD(array);
-                D_RW(D_RW(array)->data)[i] = value;
-            } TX_END
-            value = temp;
-        }
-
+        temp[i] = value;
+        value = D_RO(D_RO(array)->data)[i];
     }
 
+    free(temp);
     return false;
 }
 
-//TODO: Remover com menos transações, usando estratégia de deslocamento de blocos, e não elemento a elemento.
+// Remove todas as ocorrências do valor informado do array persistente.
+// Após a remoção, a estrutura tenta reduzir o tamanho do array se a taxa de
+// ocupação justificar.
 bool remove_data(PMEMobjpool *pop, TOID(struct array) array, int value) {
 
     if (D_RO(D_RO(array)->data)[0] == DEFAULT) {
         return false;
     }
 
+    int* temp = malloc(D_RO(array)->max_size * sizeof(int));
     for (int i = 0; i < D_RO(array)->max_size; i++) {
 
         if (D_RO(D_RO(array)->data)[i] < value) {
+            temp[i] = D_RO(D_RO(array)->data)[i];
             continue;
         }
 
         if (D_RO(D_RO(array)->data)[i] > value || D_RO(D_RO(array)->data)[i] == DEFAULT) {
+            free(temp);
             return false;
         }
 
@@ -398,37 +449,41 @@ bool remove_data(PMEMobjpool *pop, TOID(struct array) array, int value) {
             j++;
         }
 
-        D_RW(array)->size -= (j - i);
-
+        int new_size = D_RO(array)->size - (j - i);
         while (i < j && j < D_RO(array)->max_size) {
-            TX_BEGIN(pop) {
-                TX_ADD(array);
-                D_RW(D_RW(array)->data)[i] = D_RO(D_RO(array)->data)[j];
-                if (lifetime != DEFAULT) {
-                    if (lifetime == 0)
-                        exit(0);
-                    lifetime--;
-                }
-            } TX_END
+            temp[i] = D_RO(D_RO(array)->data)[j];
             i++;
             j++;
         }
 
         while (i < D_RO(array)->max_size) {
-            TX_BEGIN(pop) {
-                TX_ADD(array);
-                D_RW(D_RW(array)->data)[i] = DEFAULT;
-            } TX_END
+            temp[i] = DEFAULT;
             i++;
         }
 
+        TX_BEGIN(pop) {
+            TX_ADD(D_RW(array)->data);
+            TX_ADD(array);
+
+            pmemobj_memcpy(pop, D_RW(D_RW(array)->data), temp, D_RO(array)->max_size * sizeof(int), POBJ_FLAG_ZERO);
+            if (lifetime != DEFAULT) {
+                if (lifetime == 0)
+                    exit(0);
+                lifetime--;
+            }
+            D_RW(array)->size = new_size;
+        } TX_END
+
     }
 
+    free(temp);
     reduce_array(pop, array);
-
     return true;
 }
 
+// Busca a posição do valor informado usando a árvore B+ como índice.
+// A árvore aponta para os intervalos relevantes do array; a busca final é feita
+// diretamente no vetor persistente dentro da faixa correspondente.
 int search_data(B_tree_plus* b_tree_plus, int value) {
 
     if (D_RO(D_RO(b_tree_plus->content)->data)[0] == DEFAULT) {
@@ -471,6 +526,8 @@ int search_data(B_tree_plus* b_tree_plus, int value) {
     return INT_MIN;
 }
 
+// Exibe o conteúdo do array persistente em blocos de leitura mais amigáveis.
+// Locais vazios são marcados como `**` para facilitar a inspeção visual.
 bool display_data(TOID(struct array) array, FILE* output_file) {
 
     int data_chunk = INITIAL_SIZE / SIZE_RATE;
@@ -497,6 +554,8 @@ bool display_data(TOID(struct array) array, FILE* output_file) {
     return true;
 }
 
+// Exibe os nós da árvore de índices e os intervalos de dados associados a cada
+// nó, permitindo acompanhar a estrutura hierárquica da B+.
 bool display_b_tree(B_tree* root, FILE* output_file) {
 
     if (root == NULL) {
@@ -506,14 +565,18 @@ bool display_b_tree(B_tree* root, FILE* output_file) {
     display_b_tree(root->left, output_file);
     display_b_tree(root->right, output_file);
     if (root->value != DEFAULT) {
-        fprintf(output_file, "Node value: %d, Array left: %d, Array right: %d\n", root->value, root->array_left, root->array_right);
+        fprintf(output_file, "Node value: %d, Array left: %d, Array right: %d\n", root->value, root->array_left/(INITIAL_SIZE/SIZE_RATE) + 1, root->array_right/(INITIAL_SIZE/SIZE_RATE) + 1);
     } else {
-        fprintf(output_file, "Node value: **, Array left: %d, Array right: %d\n", root->array_left, root->array_right);
+        fprintf(output_file, "Node value: **, Array left: %d, Array right: %d\n", root->array_left/(INITIAL_SIZE/SIZE_RATE) + 1, root->array_right/(INITIAL_SIZE/SIZE_RATE) + 1);
     }
 
     return true;
 }
 
+// Programa principal da árvore B+ persistente.
+// O fluxo de execução cria ou abre um pool PMDK, inicializa o array persistente,
+// montando a árvore de índices e apresenta um menu interativo para inserção,
+// remoção, busca, exportação e reset do conjunto de dados.
 int main(int argc, char *argv[]) {
 
     #ifdef MASSIVE_TEST
