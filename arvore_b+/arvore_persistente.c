@@ -344,7 +344,7 @@ bool reduce_array(PMEMobjpool *pop, TOID(struct array) array) {
 
     float actual_rate = ((float) D_RO(array)->size) / ((float)D_RO(array)->max_size);
 
-    if (actual_rate >= REDUCTION_RATE || D_RO(array)->max_size / SIZE_RATE <= INITIAL_SIZE) {
+    if (actual_rate >= REDUCTION_RATE || D_RO(array)->max_size / SIZE_RATE < INITIAL_SIZE) {
         return false;
     }
 
@@ -395,12 +395,12 @@ bool insert_data(PMEMobjpool *pop, TOID(struct array) array, int value) {
                 TX_ADD(D_RW(array)->data);
                 TX_ADD(array);
 
-                pmemobj_memcpy(pop, D_RW(D_RW(array)->data), temp, (i+1) * sizeof(int), POBJ_FLAG_ZERO);
                 if (lifetime != DEFAULT) {
                     if (lifetime == 0)
                         exit(0);
                     lifetime--;
                 }
+                pmemobj_memcpy(pop, D_RW(D_RW(array)->data), temp, (i+1) * sizeof(int), POBJ_FLAG_ZERO);
                 D_RW(array)->size++;
 
             } TX_END
@@ -432,49 +432,51 @@ bool remove_data(PMEMobjpool *pop, TOID(struct array) array, int value) {
     }
 
     int* temp = malloc(D_RO(array)->max_size * sizeof(int));
-    for (int i = 0; i < D_RO(array)->max_size; i++) {
 
-        if (D_RO(D_RO(array)->data)[i] < value) {
-            temp[i] = D_RO(D_RO(array)->data)[i];
-            continue;
-        }
+    int i = 0;
+    while (i < D_RO(array)->max_size && D_RO(D_RO(array)->data)[i] < value && D_RO(D_RO(array)->data)[i] != DEFAULT) {
+        temp[i] = D_RO(D_RO(array)->data)[i];
+        i++;
+    }
 
-        if (D_RO(D_RO(array)->data)[i] > value || D_RO(D_RO(array)->data)[i] == DEFAULT) {
-            free(temp);
-            return false;
-        }
+    if (D_RO(D_RO(array)->data)[i] != value) {
+        free(temp);
+        return false;
+    }
 
-        int j = i;
-        while (j < D_RO(array)->max_size && D_RO(D_RO(array)->data)[j] == value) {
-            j++;
-        }
+    int j = i;
+    while (j < D_RO(array)->max_size && D_RO(D_RO(array)->data)[j] == value) {
+        j++;
+    }
 
-        int new_size = D_RO(array)->size - (j - i);
-        while (i < j && j < D_RO(array)->max_size) {
+    int new_size = D_RO(array)->size - (j - i);
+    if (j != D_RO(array)->max_size) {
+
+        while (j < D_RO(array)->max_size && D_RO(D_RO(array)->data)[j] != DEFAULT) {
             temp[i] = D_RO(D_RO(array)->data)[j];
             i++;
             j++;
         }
-
-        while (i < D_RO(array)->max_size) {
-            temp[i] = DEFAULT;
-            i++;
-        }
-
-        TX_BEGIN(pop) {
-            TX_ADD(D_RW(array)->data);
-            TX_ADD(array);
-
-            pmemobj_memcpy(pop, D_RW(D_RW(array)->data), temp, D_RO(array)->max_size * sizeof(int), POBJ_FLAG_ZERO);
-            if (lifetime != DEFAULT) {
-                if (lifetime == 0)
-                    exit(0);
-                lifetime--;
-            }
-            D_RW(array)->size = new_size;
-        } TX_END
-
     }
+
+    while (i < j) {
+        temp[i] = DEFAULT;
+        i++;
+    }
+
+
+    TX_BEGIN(pop) {
+        TX_ADD(D_RW(array)->data);
+        TX_ADD(array);
+
+        if (lifetime != DEFAULT) {
+            if (lifetime == 0)
+                exit(0);
+            lifetime--;
+        }
+        pmemobj_memcpy(pop, D_RW(D_RW(array)->data), temp, i * sizeof(int), POBJ_FLAG_ZERO);
+        D_RW(array)->size = new_size;
+    } TX_END
 
     free(temp);
     reduce_array(pop, array);
@@ -620,7 +622,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    int option, temp;
+    int option, temp, ticket = 0;
     char buffer[BUFFER_SIZE];
     B_tree_plus b_tree_plus = {NULL, TOID_NULL(struct array)};
     
@@ -653,7 +655,7 @@ int main(int argc, char *argv[]) {
             }
             printf(")");
         }
-        printf("\n1. Insert data\n2. Remove by value\n3. Search by value\n4. Export B-Tree Plus\n5. Reset B-Tree Plus\n6. Exit\n >> ");
+        printf("\n1. Insert data\n2. Remove by value\n3. Search by value\n4. Export B-Tree Plus\n5. Reset B-Tree Plus\n6. Charge Energy\n7. Cancel Energy\n8. Exit\n >> ");
 		fgets(buffer, BUFFER_SIZE-1, stdin);
         option = atoi(buffer);
 
@@ -703,8 +705,15 @@ int main(int argc, char *argv[]) {
                 if (isalpha(buffer[0])) {
                     FILE* output_file = fopen(strcat(buffer,".txt"),"a+");
                     time_t currentTime = time(NULL);
+                    ticket++;
 
-                    fprintf(output_file, "Data Ticket - %s\nCurrent data:\n", ctime(&currentTime));
+                    fprintf(output_file, "Data Ticket %d - %s", ticket, ctime(&currentTime));
+
+                    if (lifetime >=0) {
+                        fprintf(output_file, "\nCurrent charge: %dx █\n",lifetime);
+                    }
+
+                    fprintf(output_file, "\nCurrent data:\n");
                     display_data(b_tree_plus.content, output_file);
 
                     fprintf(output_file, "\nCurrent B-Tree:\n");
@@ -726,8 +735,24 @@ int main(int argc, char *argv[]) {
                 reset_b_tree(&b_tree_plus.index);
                 printf("\nB-Tree Plus reseted!");
                 break;
+            
+            case 6: // Caso de adição de energia
+                printf("Enter the amount of energy to be added: ");
+                fgets(buffer, BUFFER_SIZE-1, stdin);
+                if (lifetime != DEFAULT) {
+                    lifetime += atoi(buffer);
+                } else {
+                    lifetime = atoi(buffer);
+                }
+                printf("Energy added!\n");
+                break;
+            
+            case 7: // Caso de remoção da energia
+                lifetime = DEFAULT;
+                printf("Energy removed!\n");
+                break;
 
-            case 6: // Caso de saída do programa
+            case 8: // Caso de saída do programa
                 delete_b_tree(&b_tree_plus.index);
                 exit(0);
             
