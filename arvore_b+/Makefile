@@ -21,16 +21,15 @@ volatile: arvore_volatil
 persistent: arvore_persistente
 	./arvore_persistente
 
-test: arvore_persistente
-	./arvore_persistente 10
-
-massive_test: arvore_persistente.c veryclean
-	$(CC) $(CFLAGS) -DMASSIVE_TEST $< -o arvore_persistente $(LDFLAGS)
-	$(CC) multi_test.c -o multi_test
+massive_test: arvore_persistente.c arvore_volatil.c veryclean
+	mkdir -p Pools
+	$(CC) $(CFLAGS) -DMASSIVE_TEST arvore_persistente.c  -o arvore_persistente $(LDFLAGS)
+	$(CC) $(CFLAGS) -DMASSIVE_TEST arvore_volatil.c -o arvore_volatil $(LDFLAGS)
+	$(CC) $(CFLAGS) multi_test.c -o multi_test
 	./multi_test
 
 clean:
 	rm -f arvore_persistente arvore_volatil multi_test
 
 veryclean: clean
-	rm -f *~ tree_plus_pool*.obj
+	rm -f *~ Pools

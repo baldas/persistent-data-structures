@@ -17,15 +17,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <limits.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
 
 #define FULL 1.0
 #define EMPTY 0.0
+#define DEFAULT INT_MIN
 
 #define BUFFER_SIZE 64
 #define INITIAL_SIZE 8
 #define SIZE_RATE 2
 #define EXPAND_RATE 0.75
 #define REDUCTION_RATE (EXPAND_RATE / SIZE_RATE)
+
+// Inicialização de variáveis globais
+int lifetime = DEFAULT;
 
 /*
  * Estrutura de dados base.
@@ -471,16 +479,16 @@ void end_hash() {
  * remoção lógica. O símbolo [*] indica slot vazio. Essa visualização facilita o diagnóstico
  * do comportamento de colisões e do estado atual da tabela.
  */
-void display() {
+void display(FILE* output_file) {
 
     // Percorre as linhas de 8 itens do hash
     for (int i = 0; i < (hash->max_size / INITIAL_SIZE); i++) {
 
         // Caso seja a primeira linha, imprime o cabeçalho do hash
         if (i != 0)
-            printf("\n       ");
+            fprintf(output_file, "\n       ");
         else
-            printf("\n\n HASH =");
+            fprintf(output_file, "\n\n HASH =");
 
         // Percorre os itens do hash daquela linha
         for (int j = 0; j < INITIAL_SIZE; j++) {
@@ -490,30 +498,125 @@ void display() {
 
                 // Caso não esteja ocupado, usa a flag de remoção na resposta
                 if (hash->occupied[i*INITIAL_SIZE+j])
-                    printf(" [%d] ", hash->data[i*INITIAL_SIZE+j]->num);
+                    fprintf(output_file, " [%d] ", hash->data[i*INITIAL_SIZE+j]->num);
                 else
-                    printf(" [!%d] ", hash->data[i*INITIAL_SIZE+j]->num);
+                    fprintf(output_file, " [!%d] ", hash->data[i*INITIAL_SIZE+j]->num);
 
             } else
-                printf(" [*] ");
+                fprintf(output_file, " [*] ");
         }
 
-        printf(" (%d)", (i+1)*INITIAL_SIZE);
+        fprintf(output_file, " (%d)", (i+1)*INITIAL_SIZE);
     }
 }
 
-int main() {
+// Exporta o conteúdo do array para o json
+bool json_content(FILE* output_file) {
 
-    int option, temp;
+    for (int i = 0; i < hash->max_size; i++) {
+
+        if (hash->data[i] == NULL) {
+            fprintf(output_file, "\"**\"");
+        } else {
+            if (hash->occupied[i])
+                fprintf(output_file,"\"%d\"", hash->data[i]->num);
+            else
+                fprintf(output_file,"\"!%d\"", hash->data[i]->num);
+        }
+        if (!(i == hash->max_size -1))
+            fprintf(output_file,", ");
+    }
+
+    return true;
+}
+
+// Realiza a exportação dos dados para json
+bool export_json(char * buffer) {
+    buffer[BUFFER_SIZE-6] = '\0';
+    FILE* output_file = fopen(strcat(buffer,".json"),"a+");
+    time_t currentTime = time(NULL);
+
+    fprintf(output_file, "{\n\"time\":\"%s\",\n", ctime(&currentTime));
+
+    fprintf(output_file, "\"charge\": \"%d\",\n",lifetime);
+
+    fprintf(output_file, "\"content\":[\n");
+    json_content(output_file);
+    fprintf(output_file, "],\n");
+
+    fclose(output_file);
+    return true;
+}
+
+// Realiza a exportação dos dados para txt
+bool export_text(char * buffer, int ticket) {
+    buffer[BUFFER_SIZE-5] = '\0';
+    FILE* output_file = fopen(strcat(buffer,".txt"),"a+");
+    time_t currentTime = time(NULL);
+
+    fprintf(output_file, "Data Ticket %d - %s", ticket, ctime(&currentTime));
+
+    if (lifetime >=0) {
+        fprintf(output_file, "\nCurrent charge: %dx █\n",lifetime);
+    }
+
+    fprintf(output_file, "\nCurrent data:\n");
+    display(output_file);
+
+    fprintf(output_file, "\n\nExported by Hash program.\n");
+    fprintf(output_file, "----------------------------------------------\n");
+    fclose(output_file);
+    return true;
+}
+
+int main(int argc, char *argv[]) {
+
+    #ifdef MASSIVE_TEST
+
+        #ifdef _WIN32
+            const char *null_device = "NUL";
+        #else
+            const char *null_device = "/dev/null";
+        #endif
+
+        if (freopen(null_device, "w", stdout) == NULL) {
+            perror("Erro ao redirecionar stdout");
+            return 1;
+        }
+
+    #endif
+
+    switch (argc) {
+        case 1: break;
+        case 2: case 3: lifetime = atoi(argv[1]); break;
+        default:
+            perror("Try to use less arguments.\n");
+            return 1;
+    }
+
+    int option, temp, ticket = 0;
+    bool json_export_type = false;
     char buffer[BUFFER_SIZE];
     DATA data;
     start_hash();
 
     // Menu de interação
 	while (true) {
-		display();
+		display(stdout);
 
-		printf("\n\nEnter your choice:\n1. Insert data\n2. Remove by position\n3. Remove by value\n4. Search by value\n5. Restore by position\n6. Reset Hash\n7. Exit\n >> ");
+		printf("\n\nEnter your choice:");
+        if (lifetime >=0) {
+            printf(" (");
+            switch (lifetime) {
+                case 0: printf("- - -"); break;
+                case 1: printf("█ - -"); break;
+                case 2: printf("█ █ -"); break;
+                case 3: printf("█ █ █"); break;
+                default: printf("%dx █",lifetime);
+            }
+            printf(")");
+        }
+        printf("\n1. Insert data\n2. Remove data\n3. Search data\n4. Advanced\n5. Exit\n >> ");
 		fgets(buffer, BUFFER_SIZE-1, stdin);
         option = atoi(buffer);
 
@@ -531,18 +634,7 @@ int main() {
                 }
                 break;
 
-            case 2: // Caso da remoção posicional
-                printf("Enter position to be removed: ");
-                fgets(buffer, BUFFER_SIZE-1, stdin);
-                temp = atoi(buffer);
-                if (remove_position(temp-1)) {
-                    printf("Position removed!");
-                } else {
-                    printf("Position not removed.");
-                }
-                break;
-
-            case 3: // Caso da remoção de ites
+            case 2: // Caso da remoção de ites
                 printf("Enter value to be removed: ");
                 fgets(buffer, BUFFER_SIZE-1, stdin);
                 data.num = atoi(buffer);
@@ -553,7 +645,7 @@ int main() {
                 }
                 break;
 
-            case 4: // Caso da busca (para ver se há um dado item)
+            case 3: // Caso da busca (para ver se há um dado item)
                 printf("Enter value to be searched: ");
                 fgets(buffer, BUFFER_SIZE-1, stdin);
                 data.num = atoi(buffer);
@@ -564,26 +656,104 @@ int main() {
                 }
                 break;
 
-            case 5: // Caso de restauração de itens recém-deletados
-                printf("Enter position to be restored: ");
+            case 4: //Segundo menu com opções avançadas
+            
+                printf("\n\nEnter your choice:");
+                printf("\n1. Export data\n2. Reset structure\n3. Charge Energy\n4. Cancel Energy Mode\n5. Remove by position\n6. Restore by position\n0. Back\n >> ");
                 fgets(buffer, BUFFER_SIZE-1, stdin);
-                temp = atoi(buffer);
-                if (restore_position(temp-1)) {
-                    printf("Position restored!");
-                } else {
-                    printf("Position not restored.");
-                }
-                break;
+                option = atoi(buffer);
 
-            case 6: // Caso de reset da hash
-                end_hash();
-                start_hash();
-                printf("\nHash reseted!");
-                break;
+                switch (option) {
 
-            case 7: // Caso de saída do programa
+                    case 1: // Caso de exportação dos dados
+
+                        printf("\nEnter file type to be exported: ");
+                        printf("\n1. TXT\n2. JSON\n >> ");
+                        fgets(buffer, BUFFER_SIZE-1, stdin);
+                        option = atoi(buffer);
+
+                        if (option != 1 && option != 2)
+                            break;
+
+                        json_export_type = (option == 2);
+
+                        printf("Enter file name to be added: ");
+                        fgets(buffer, BUFFER_SIZE-1, stdin);
+
+                        if (isalpha(buffer[0])) {
+
+                            buffer[strcspn(buffer, "\n")] = '\0';
+
+                            if (json_export_type)
+                                export_json(buffer);
+                            else
+                                export_text(buffer, ++ticket);
+
+                            printf("Hash exported!\n");
+
+                        } else
+                            printf("Failed to export Hash!\n");
+                        break;
+
+                    case 2: // Caso de reset da estrutura
+                        end_hash();
+                        start_hash();
+                        printf("\nHash reseted!");
+                        break;
+
+                    case 3: // Caso de adição de energia
+                        printf("Enter the amount of energy to be added: ");
+                        fgets(buffer, BUFFER_SIZE-1, stdin);
+                        if (lifetime != DEFAULT) {
+                            lifetime += atoi(buffer);
+                        } else {
+                            lifetime = atoi(buffer);
+                        }
+                        printf("Energy added!\n");
+                        break;
+                    
+                    case 4: // Caso de cancelamento do modo de energia
+                        lifetime = DEFAULT;
+                        printf("Energy removed!\n");
+                        break;
+                    
+                    case 5: // Caso de Remoção por Posição
+                        printf("Enter position to be removed: ");
+                        fgets(buffer, BUFFER_SIZE-1, stdin);
+                        temp = atoi(buffer);
+                        if (remove_position(temp-1)) {
+                            printf("Position removed!");
+                        } else {
+                            printf("Position not removed.");
+                        }
+                        break;
+
+                    case 6: // Caso de Restauração por Posição
+                        printf("Enter position to be restored: ");
+                        fgets(buffer, BUFFER_SIZE-1, stdin);
+                        temp = atoi(buffer);
+                        if (restore_position(temp-1)) {
+                            printf("Position restored!");
+                        } else {
+                            printf("Position not restored.");
+                        }
+                        break;
+
+                    default:
+                }break;
+
+            case 5:// Caso de saída do programa
                 end_hash();
                 exit(0);
+                break; 
+
+            case 41: //Opção secreta para exportar em json com 1 comando
+                fgets(buffer, BUFFER_SIZE-1, stdin);
+                if (isalpha(buffer[0])) {
+                    buffer[strcspn(buffer, "\n")] = '\0';
+                    export_json(buffer);
+                }
+                break;
             
             default:
         }

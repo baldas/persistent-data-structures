@@ -21,16 +21,15 @@ volatile: hash_volatil
 persistent: hash_persistente
 	./hash_persistente
 
-test: hash_persistente
-	./hash_persistente 10
-
 massive_test: hash_persistente.c veryclean
-	$(CC) $< -o $(BINS)  $(LDFLAGS) -DMASSIVE_TEST
-	$(CC) multi_test.c -o multi_test
+	mkdir -p Pools
+	$(CC) $(CFLAGS) -DMASSIVE_TEST hash_persistente.c -o hash_persistente $(LDFLAGS)
+	$(CC) $(CFLAGS) -DMASSIVE_TEST hash_volatil.c -o hash_volatil $(LDFLAGS) 
+	$(CC) $(CFLAGS) multi_test.c -o multi_test
 	./multi_test
 
 clean:
 	rm -f hash_persistente hash_volatil multi_test
 
 veryclean: clean
-	rm -f *~ hash_pool*.obj
+	rm -f *~ Pools

@@ -14,7 +14,7 @@
 // Cria e executa a tarefa: chama `./arvore_persistente lifetime id`
 // - id: identificador da tarefa (usado também para compor o nome do pool)
 // - lifetime: argumento passado para controlar o tempo de vida no programa
-void task(int id, int lifetime) {
+int task(int id, int lifetime) {
 
     char lifetime_buffer[64] = "";
     snprintf(lifetime_buffer, sizeof(char) * 64, "%d", lifetime);
@@ -30,6 +30,31 @@ void task(int id, int lifetime) {
         perror("Erro ao rodar o seu executável");
         exit(EXIT_FAILURE);
     }
+}
+
+int child_code(int id_tarefa) {
+    printf("[Filho] Processando tarefa #%d (PID: %d) em um core...\n", id_tarefa, getpid());
+
+    // Abre o arquivo de entrada de testes e redireciona para stdin
+    int arquivo_fd = open("test.txt", O_RDONLY);
+    if (arquivo_fd < 0) {
+        perror("Erro ao abrir o arquivo test.txt");
+        return EXIT_FAILURE;
+    }
+
+    if (dup2(arquivo_fd, STDIN_FILENO) < 0) {
+        perror("Erro no dup2");
+        return EXIT_FAILURE;
+    }
+
+    close(arquivo_fd);
+    
+    // Executa a tarefa (substitui o processo filho)
+    task(id_tarefa, id_tarefa-1);
+    
+    // Se o exec falhar, o código abaixo seria executado; mantido por segurança
+    printf("[Filho] Tarefa #%d CONCLUÍDA.\n", id_tarefa);
+    return EXIT_SUCCESS;
 }
 
 int main(int argc, char* argv[]) {
@@ -70,32 +95,8 @@ int main(int argc, char* argv[]) {
             }
 
             if (pid == 0) {
-
-                // Código do filho
                 int id_tarefa = tarefas_criadas + 1;
-                printf("[Filho] Processando tarefa #%d (PID: %d) em um core...\n", id_tarefa, getpid());
-
-                // Abre o arquivo de entrada de testes e redireciona para stdin
-                int arquivo_fd = open("test.txt", O_RDONLY);
-                if (arquivo_fd < 0) {
-                    perror("Erro ao abrir o arquivo test.txt");
-                    exit(EXIT_FAILURE);
-                }
-
-                if (dup2(arquivo_fd, STDIN_FILENO) < 0) {
-                    perror("Erro no dup2");
-                    exit(EXIT_FAILURE);
-                }
-
-                close(arquivo_fd);
-                
-                // Executa a tarefa (substitui o processo filho)
-                task(id_tarefa, id_tarefa-1);
-                
-                // Se o exec falhar, o código abaixo seria executado; mantido por segurança
-                printf("[Filho] Tarefa #%d CONCLUÍDA.\n", id_tarefa);
-                exit(EXIT_SUCCESS);
-
+                exit(child_code(id_tarefa));
             }
 
             // Pai: atualiza contadores e continua criando filhos até encher o lote

@@ -33,17 +33,11 @@
 #define MB (1024ULL * KB)
 #define GB (1024ULL * MB)
 #define POOL_SIZE PMEMOBJ_MIN_POOL
-#define POOL_NAME "tree_plus_pool"
+#define POOL_NAME "./Pools/"
 
 // Inicialização de variáveis e do pool
 int lifetime = DEFAULT;
 char pool_name[BUFFER_SIZE] = "default";
-
-POBJ_LAYOUT_BEGIN(BTREEPLUS);
-  POBJ_LAYOUT_ROOT(BTREEPLUS, struct my_root);
-  POBJ_LAYOUT_TOID(BTREEPLUS, struct array);
-  POBJ_LAYOUT_TOID(BTREEPLUS, int);
-POBJ_LAYOUT_END(BTREEPLUS);
 
 // Definição das estruturas de dados persistentes.
 // `struct array` mantém o estado do array persistente armazenado no pool.
@@ -51,9 +45,9 @@ POBJ_LAYOUT_END(BTREEPLUS);
 // - max_size: capacidade atual do array
 // - data: array persistente de inteiros armazenados
 struct array {
-  int size;
-  int max_size;
-  TOID(int) data;
+    int size;
+    int max_size;
+    TOID(int) data;
 };
 
 typedef struct array Array;
@@ -61,7 +55,7 @@ typedef struct array Array;
 // `my_root` é o root object do pool PMEM e aponta para o array persistente
 // que guarda os dados da árvore B+.
 struct my_root {
-  TOID(struct array) p_array;
+    TOID(struct array) p_array;
 };
 
 // `B_tree` representa um nó da árvore de índices B+.
@@ -86,13 +80,21 @@ typedef struct {
     TOID(struct array) content;
 } B_tree_plus;
 
+POBJ_LAYOUT_BEGIN(BTREEPLUS);
+    POBJ_LAYOUT_ROOT(BTREEPLUS, struct my_root);
+    POBJ_LAYOUT_TOID(BTREEPLUS, struct array);
+    POBJ_LAYOUT_TOID(BTREEPLUS, int);
+POBJ_LAYOUT_END(BTREEPLUS);
+
+bool delete_b_tree(B_tree** root);
+
 // Inicializa a árvore de índices em memória volátil.
 // A subárvore é criada com um nó raiz contendo `DEFAULT` e com faixas vazias
 // inicializadas para o primeiro bloco de dados.
 bool init_b_tree(B_tree** root) {
 
     if ((*root) != NULL) {
-        free(*root);
+        delete_b_tree(*root);
     }
 
     (*root) = malloc(sizeof(B_tree));
@@ -331,6 +333,7 @@ bool expand_array(PMEMobjpool *pop, TOID(struct array) array) {
         D_RW(array)->max_size *= SIZE_RATE;
     } TX_END
 
+    free(temp);
     return true;
 }
 
@@ -371,6 +374,7 @@ bool reduce_array(PMEMobjpool *pop, TOID(struct array) array) {
         D_RW(array)->max_size /= SIZE_RATE;
     } TX_END
 
+    free(temp);
     return true;
 }
 
@@ -439,7 +443,7 @@ bool remove_data(PMEMobjpool *pop, TOID(struct array) array, int value) {
         i++;
     }
 
-    if (D_RO(D_RO(array)->data)[i] != value) {
+    if (i >= D_RO(array)->max_size ||  D_RO(D_RO(array)->data)[i] != value) {
         free(temp);
         return false;
     }
@@ -511,16 +515,18 @@ int search_data(B_tree_plus* b_tree_plus, int value) {
         return current_node->array_right;
     }
 
-    if (current_node->value > value) {
-        for (int i = current_node->array_left; i < current_node->array_right; i++) {
-            if (D_RO(D_RO(b_tree_plus->content)->data)[i] == value) {
-                return i;
+    if (current_node != NULL) {
+        if (current_node->value > value) {
+            for (int i = current_node->array_left; i < current_node->array_right; i++) {
+                if (D_RO(D_RO(b_tree_plus->content)->data)[i] == value) {
+                    return i;
+                }
             }
-        }
-    } else {
-        for (int i = current_node->array_right; i < current_node->array_right + INITIAL_SIZE/SIZE_RATE; i++) {
-            if (D_RO(D_RO(b_tree_plus->content)->data)[i] == value) {
-                return i;
+        } else {
+            for (int i = current_node->array_right; i < current_node->array_right + INITIAL_SIZE/SIZE_RATE; i++) {
+                if (D_RO(D_RO(b_tree_plus->content)->data)[i] == value) {
+                    return i;
+                }
             }
         }
     }
@@ -575,6 +581,95 @@ bool display_b_tree(B_tree* root, FILE* output_file) {
     return true;
 }
 
+// Exporta o conteúdo do array para o json
+bool json_content(TOID(struct array) array, FILE* output_file) {
+
+    for (int i = 0; i < D_RO(array)->max_size; i++) {
+
+        if (D_RO(D_RO(array)->data)[i] == DEFAULT) {
+            fprintf(output_file, "\"**\", ");
+        } else {
+            fprintf(output_file,"\"%d\", ", D_RO(D_RO(array)->data)[i]);
+        }
+
+        if (!(i == D_RO(array)->max_size -1))
+            fprintf(output_file,", ");
+    }
+
+    return true;
+}
+
+// Exporta o conteúdo dos índices para o json
+bool json_index(B_tree* root, FILE* output_file) {
+
+    if (root == NULL) {
+        return false;
+    }
+
+    json_index(root->left, output_file);
+    json_index(root->right, output_file);
+    if (root->value != DEFAULT) {
+        fprintf(output_file, "{\"value\": \"%d\", \"left\": \"%d\", \"right\": \"%d\"},\n", root->value, root->array_left/(INITIAL_SIZE/SIZE_RATE) + 1, root->array_right/(INITIAL_SIZE/SIZE_RATE) + 1);
+    } else {
+        fprintf(output_file, "{\"value\": \"**\", \"left\": \"%d\", \"right\": \"%d\"},\n", root->array_left/(INITIAL_SIZE/SIZE_RATE) + 1, root->array_right/(INITIAL_SIZE/SIZE_RATE) + 1);
+    }
+
+    return true;
+}
+
+// Realiza a exportação dos dados para json
+bool export_json(char * buffer, B_tree_plus * b_tree_plus) {
+    buffer[BUFFER_SIZE-6] = '\0';
+    FILE* output_file = fopen(strcat(buffer,".json"),"a+");
+    time_t currentTime = time(NULL);
+
+    fprintf(output_file, "{\n\"time\":\"%s\",\n", ctime(&currentTime));
+
+    fprintf(output_file, "\"charge\": \"%d\",\n",lifetime);
+
+    fprintf(output_file, "\"content\":[\n");
+    json_content(b_tree_plus->content, output_file); 
+    fprintf(output_file, "],\n");
+
+    fprintf(output_file, "\"index\":[");
+    json_index(b_tree_plus->index->left, output_file);
+    json_index(b_tree_plus->index->right, output_file);
+
+    if (b_tree_plus->index->value != DEFAULT)
+        fprintf(output_file, "{\"value\": \"%d\", \"left\": \"%d\", \"right\": \"%d\"}", b_tree_plus->index->value, b_tree_plus->index->array_left/(INITIAL_SIZE/SIZE_RATE) + 1, b_tree_plus->index->array_right/(INITIAL_SIZE/SIZE_RATE) + 1);
+    else
+        fprintf(output_file, "{\"value\": \"**\", \"left\": \"%d\", \"right\": \"%d\"}", b_tree_plus->index->array_left/(INITIAL_SIZE/SIZE_RATE) + 1, b_tree_plus->index->array_right/(INITIAL_SIZE/SIZE_RATE) + 1);
+    
+    fprintf(output_file, "\n]\n}"); 
+
+    fclose(output_file);
+    return true;
+}
+
+// Realiza a exportação dos dados para txt
+bool export_text(char * buffer, B_tree_plus * b_tree_plus, int ticket) {
+    buffer[BUFFER_SIZE-5] = '\0';
+    FILE* output_file = fopen(strcat(buffer,".txt"),"a+");
+    time_t currentTime = time(NULL);
+
+    fprintf(output_file, "Data Ticket %d - %s", ticket, ctime(&currentTime));
+
+    if (lifetime >=0) {
+        fprintf(output_file, "\nCurrent charge: %dx █\n",lifetime);
+    }
+
+    fprintf(output_file, "\nCurrent data:\n");
+    display_data(b_tree_plus->content, output_file);
+
+    fprintf(output_file, "\nCurrent B-Tree:\n");
+    display_b_tree(b_tree_plus->index, output_file);
+
+    fprintf(output_file, "\n\nExported by B-Tree Plus program.\n");
+    fprintf(output_file, "----------------------------------------------\n");
+    fclose(output_file);
+    return true;
+}
+
 // Programa principal da árvore B+ persistente.
 // O fluxo de execução cria ou abre um pool PMDK, inicializa o array persistente,
 // montando a árvore de índices e apresenta um menu interativo para inserção,
@@ -593,6 +688,7 @@ int main(int argc, char *argv[]) {
             perror("Erro ao redirecionar stdout");
             return 1;
         }
+
     #endif
 
     switch (argc) {
@@ -623,6 +719,7 @@ int main(int argc, char *argv[]) {
     }
 
     int option, temp, ticket = 0;
+    bool json_export_type = false;
     char buffer[BUFFER_SIZE];
     B_tree_plus b_tree_plus = {NULL, TOID_NULL(struct array)};
     
@@ -655,7 +752,7 @@ int main(int argc, char *argv[]) {
             }
             printf(")");
         }
-        printf("\n1. Insert data\n2. Remove by value\n3. Search by value\n4. Export B-Tree Plus\n5. Reset B-Tree Plus\n6. Charge Energy\n7. Cancel Energy\n8. Exit\n >> ");
+        printf("\n1. Insert data\n2. Remove data\n3. Search data\n4. Advanced\n5. Exit\n >> ");
 		fgets(buffer, BUFFER_SIZE-1, stdin);
         option = atoi(buffer);
 
@@ -695,69 +792,92 @@ int main(int argc, char *argv[]) {
                 }
                 break;
 
-            case 4: // Caso de exportação da árvore
-                printf("Enter file name to be added: ");
-                fgets(buffer, BUFFER_SIZE-1, stdin);
-
-                buffer[strcspn(buffer, "\n")] = '\0';
-                buffer[BUFFER_SIZE-5] = '\0';
-
-                if (isalpha(buffer[0])) {
-                    FILE* output_file = fopen(strcat(buffer,".txt"),"a+");
-                    time_t currentTime = time(NULL);
-                    ticket++;
-
-                    fprintf(output_file, "Data Ticket %d - %s", ticket, ctime(&currentTime));
-
-                    if (lifetime >=0) {
-                        fprintf(output_file, "\nCurrent charge: %dx █\n",lifetime);
-                    }
-
-                    fprintf(output_file, "\nCurrent data:\n");
-                    display_data(b_tree_plus.content, output_file);
-
-                    fprintf(output_file, "\nCurrent B-Tree:\n");
-                    display_b_tree(b_tree_plus.index, output_file);
-
-                    fprintf(output_file, "\n\nExported by B-Tree Plus program.\n");
-                    fprintf(output_file, "----------------------------------------------\n");
-                    fclose(output_file);
-
-                    printf("B-Tree Plus exported!\n");
-                } else {
-                    printf("Failed to export B-Tree Plus!\n");
-                }
-                break;
-
-            case 5: // Caso de reset da árvore
-                reset_array(pop, &root->p_array);
-                b_tree_plus.content = root->p_array;
-                reset_b_tree(&b_tree_plus.index);
-                printf("\nB-Tree Plus reseted!");
-                break;
+            case 4: //Segundo menu com opções avançadas
             
-            case 6: // Caso de adição de energia
-                printf("Enter the amount of energy to be added: ");
+                printf("\n\nEnter your choice:");
+                printf("\n1. Export data\n2. Reset structure\n3. Charge Energy\n4. Cancel Energy Mode\n5. Remove by position\n6. Restore by position\n0. Back\n >> ");
                 fgets(buffer, BUFFER_SIZE-1, stdin);
-                if (lifetime != DEFAULT) {
-                    lifetime += atoi(buffer);
-                } else {
-                    lifetime = atoi(buffer);
-                }
-                printf("Energy added!\n");
-                break;
-            
-            case 7: // Caso de remoção da energia
-                lifetime = DEFAULT;
-                printf("Energy removed!\n");
-                break;
+                option = atoi(buffer);
 
-            case 8: // Caso de saída do programa
+                switch (option) {
+
+                    case 1: // Caso de exportação dos dados
+
+                        printf("\nEnter file type to be exported: ");
+                        printf("\n1. TXT\n2. JSON\n >> ");
+                        fgets(buffer, BUFFER_SIZE-1, stdin);
+                        option = atoi(buffer);
+
+                        if (option != 1 && option != 2)
+                            break;
+
+                        json_export_type = (option == 2);
+
+                        printf("Enter file name to be added: ");
+                        fgets(buffer, BUFFER_SIZE-1, stdin);
+
+                        if (isalpha(buffer[0])) {
+
+                            buffer[strcspn(buffer, "\n")] = '\0';
+
+                            if (json_export_type)
+                                export_json(buffer, &b_tree_plus);
+                            else
+                                export_text(buffer, &b_tree_plus, ++ticket);
+
+                            printf("B-Tree Plus exported!\n");
+
+                        } else
+                            printf("Failed to export B-Tree Plus!\n");
+                        break;
+
+                    case 2: // Caso de reset da estrutura
+                        reset_array(pop, &root->p_array);
+                        b_tree_plus.content = root->p_array;
+                        reset_b_tree(&b_tree_plus.index);
+                        printf("\nB-Tree Plus reseted!\n");
+                        break;
+
+                    case 3: // Caso de adição de energia
+                        printf("Enter the amount of energy to be added: ");
+                        fgets(buffer, BUFFER_SIZE-1, stdin);
+                        if (lifetime != DEFAULT) {
+                            lifetime += atoi(buffer);
+                        } else {
+                            lifetime = atoi(buffer);
+                        }
+                        printf("Energy added!\n");
+                        break;
+                    
+                    case 4: // Caso de cancelamento do modo de energia
+                        lifetime = DEFAULT;
+                        printf("Energy removed!\n");
+                        break;
+                    
+                    case 5: // Caso de Remoção por Posição
+                    case 6: // Caso de Restauração por Posição
+                        printf("Unavailable in this structure.\n");
+
+                    default:
+                }break;
+
+            case 5: // Caso de saída do programa
                 delete_b_tree(&b_tree_plus.index);
+                pmemobj_close(pop);
                 exit(0);
+                break;
+
+            case 41: //Opção secreta para exportar em json com 1 comando
+                fgets(buffer, BUFFER_SIZE-1, stdin);
+                if (isalpha(buffer[0])) {
+                    buffer[strcspn(buffer, "\n")] = '\0';
+                    export_json(buffer, &b_tree_plus);
+                }
+                break;
             
             default:
         }
 	}
+    pmemobj_close(pop);
 	return 0;
 }
