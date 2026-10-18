@@ -869,10 +869,8 @@ int main(int argc, char *argv[]) {
 
             case 41: //Opção secreta para exportar em json com 1 comando
                 fgets(buffer, BUFFER_SIZE-1, stdin);
-                if (isalpha(buffer[0])) {
-                    buffer[strcspn(buffer, "\n")] = '\0';
-                    export_json(buffer, &b_tree_plus);
-                }
+                buffer[strcspn(buffer, "\n")] = '\0';
+                export_json(buffer, &b_tree_plus);
                 break;
             
             default:

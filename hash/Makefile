@@ -10,10 +10,10 @@ CFLAGS=-std=gnu99
 all: persistent
 
 hash_persistente: hash_persistente.c clean
-	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) hash_persistente.c -o $@ $(LDFLAGS)
 
 hash_volatil: hash_volatil.c clean
-	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) hash_volatil.c -o $@ $(LDFLAGS)
 
 volatile: hash_volatil
 	./hash_volatil

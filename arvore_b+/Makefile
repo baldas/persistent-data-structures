@@ -10,10 +10,10 @@ CFLAGS=-std=gnu99
 all: persistent
 
 arvore_persistente: arvore_persistente.c clean
-	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) arvore_persistente.c -o $@ $(LDFLAGS)
 
 arvore_volatil: arvore_volatil.c clean
-	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) arvore_volatil.c -o $@ $(LDFLAGS)
 
 volatile: arvore_volatil
 	./arvore_volatil

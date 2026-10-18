@@ -15,7 +15,6 @@ sort.
   do binário em paralelo; úteis para testes massivos de concorrência.
 - `arvore_volatil.c` — versão volátil (em memória RAM) da mesma estrutura para
   comparação e testes locais sem dependência de PMDK.
-- `test.txt` — arquivo de entrada de exemplo usado pelos testes massivos.
 - `Makefile` — regras para compilar `arvore_persistente` e executar testes básicos.
 
 ## Dependências
