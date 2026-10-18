@@ -1,7 +1,20 @@
-// Programa de teste que executa múltiplas instâncias de `arvore_persistente` em
-// paralelo, em lotes do tamanho do número de núcleos lógicos detectados.
-// Cada filho redireciona sua entrada padrão para `test.txt` e chama
-// o executável `./arvore_persistente` via `execvp`.
+// Programa de teste paralelo para executar várias instâncias do binário da
+// estrutura hash em concorrência.
+//
+// O objetivo principal é simular um cenário de carga em lote, em que cada
+// processo filho recebe um conjunto de entradas de teste e executa o binário
+// correspondente (persistente ou volátil) com argumentos específicos de
+// lifetime e nome do pool. O programa também coordena a criação de filhos em
+// lotes limitados pelo número de núcleos disponíveis, evitando a geração
+// excessiva de processos simultâneos.
+//
+// A lógica de execução é:
+// 1. detectar o número de núcleos lógicos;
+// 2. criar filhos em batches controlados;
+// 3. redirecionar a entrada padrão para arquivos de teste;
+// 4. invocar o executável alvo via execvp;
+// 5. reaproveitar o processo para recuperação do estado persistente quando
+//    necessário.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +28,9 @@
 #define EXEC_SIZE 2
 #define TEST_SIZE 4
 
+// Estrutura que reúne os dados de uma tarefa de teste.
+// Ela encapsula o identificador do processo, o lifetime configurado, o nome do
+// arquivo de entrada e o nome do pool persistente a ser usado pelo binário.
 typedef struct child_data {
     int id;
     int pid;
@@ -24,9 +40,15 @@ typedef struct child_data {
     char pool_name[BUFFER_SIZE];
 } Child;
 
-// Cria e executa a tarefa: chama `./arvore_persistente lifetime id`
-// - id: identificador da tarefa (usado também para compor o nome do pool)
-// - lifetime: argumento passado para controlar o tempo de vida no programa
+// Executa o binário de teste com os parâmetros apropriados.
+//
+// A função monta a linha de comando do processo e substitui o processo atual por
+// uma nova instância do executável usando execvp. Isso permite reutilizar o
+// mesmo código do filho sem criar uma camada extra de processo em C.
+//
+// Argumentos esperados pelo executável:
+//   - lifetime
+//   - pool_name
 void task(Child * data) {
 
     char lifetime_buffer[BUFFER_SIZE] = "";
@@ -45,6 +67,11 @@ void task(Child * data) {
     }
 }
 
+// Configura a entrada padrão do processo neto para um arquivo de teste.
+//
+// O processo filho cria um neto para executar o binário real. O neto recebe a
+// entrada do teste por redirecionamento do descritor STDIN. Esse padrão permite
+// rodar a aplicação sem interação manual e com arquivos de cenário definidos.
 void grandchild_code(Child* data) {
     data->input_name[BUFFER_SIZE-5] = '\0';
 
@@ -67,6 +94,14 @@ void grandchild_code(Child* data) {
     exit(EXIT_FAILURE);
 }
 
+// Coordena a execução do processo filho e, quando necessário, uma etapa de
+// recuperação do estado persistente.
+//
+// Em primeiro lugar, o filho cria um processo neto para rodar o executável de
+// teste com entrada redirecionada. Depois da execução inicial, caso o binário
+// termine corretamente, o código prepara um arquivo de entrada para a etapa de
+// recuperação e executa novamente o programa, simulando a reabertura da estrutura
+// persistente a partir do pool gerado anteriormente.
 void child_code(Child * data) {
     printf("[Filho] Processando tarefa #%d (PID: %d) em um core...\n", data->id, data->pid);
 
@@ -122,8 +157,9 @@ void child_code(Child * data) {
 
 int main(int argc, char* argv[]) {
 
-    // Detecta número de núcleos lógicos disponíveis para determinar
-    // quantos filhos executar simultaneamente (tamanho do lote)
+    // Detecta o número de núcleos lógicos disponíveis para controlar o tamanho
+    // do lote de processos simultâneos. Isso evita criar um número excessivo de
+    // filhos em máquinas com poucos recursos.
     long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
 
     if (num_cores < 1) {
@@ -134,19 +170,28 @@ int main(int argc, char* argv[]) {
     printf("[PAI] Detectados %ld processadores lógicos disponíveis.\n", num_cores);
     printf("[PAI] O tamanho do lote de processos paralelos será: %ld\n\n", num_cores);
 
-    // Parâmetros de teste
+    // Parâmetros de teste usados para montar diferentes combinações de execução.
+    //
+    // - tasks: número de tarefas por cenário
+    // - test_lifetimes: valores de lifetime utilizados nos testes
+    // - test_files: arquivos de entrada já estruturados para cada cenário
+    // - test_execs: binários que serão executados em paralelo
     int tasks = 20;
     int processos_ativos = 0;
     int test_lifetimes[] = {0, 1, 2, 3};
     char test_files[TEST_SIZE][BUFFER_SIZE] = {"./Testes/teste1","./Testes/teste2","./Testes/teste3","./Testes/teste4"};
     char test_execs[EXEC_SIZE][BUFFER_SIZE] = {"hash_persistente","hash_volatil"};
 
-    // Se fornecido um argumento, usa-o como total de tarefas
+    // Se for fornecido um argumento na linha de comando, ele substitui o valor
+    // padrão do total de tarefas a serem geradas.
     if (argc >= 2) {
         tasks = atoi(argv[1]);
     }
 
-    // Loop principal: cria filhos em lotes enquanto houver tarefas
+    // Loop principal: cria filhos em lotes enquanto houver tarefas a processar.
+    // Para cada executável, para cada arquivo de teste e para cada lifetime, o
+    // código dispara `tasks` instâncias do teste em paralelo, respeitando o limite
+    // máximo de processos ativos.
     for (int exec = 0; exec < EXEC_SIZE; exec++) {
         for (int test = 0; test < TEST_SIZE; test++) {
             for (int lifetime = 0; lifetime < LIFE_SIZE; lifetime++) {
@@ -174,6 +219,9 @@ int main(int argc, char* argv[]) {
                     }
                     processos_ativos++;
 
+                    // Mantém o número de processos ativos limitado ao número de
+                    // núcleos detectados, aguardando a finalização de algum filho
+                    // antes de criar o próximo lote.
                     while (processos_ativos >= num_cores) {
                         wait(NULL); 
                         processos_ativos--;
@@ -183,6 +231,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Espera por todos os filhos restantes antes de encerrar o processo pai.
     while (processos_ativos > 0) {
         wait(NULL); 
         processos_ativos--;

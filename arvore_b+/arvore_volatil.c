@@ -562,7 +562,12 @@ bool display_b_tree(B_tree* root, FILE* output_file) {
     return true;
 }
 
-// Exporta o conteúdo do array para o json
+/*
+ * Exporta o conteúdo atual do array para uma representação JSON.
+ * Cada valor válido é serializado desde o array, enquanto posições livres são
+ * representadas por "**" para manter a compatibilidade visual com o restante da
+ * estrutura e facilitar a inspeção dos dados em arquivos de exportação.
+ */
 bool json_content(Array* array, FILE* output_file) {
 
     for (int i = 0; i < array->max_size; i++) {
@@ -580,7 +585,12 @@ bool json_content(Array* array, FILE* output_file) {
     return true;
 }
 
-// Exporta o conteúdo dos índices para o json
+/*
+ * Exporta os nós da árvore de índice em formato JSON.
+ * A rotina percorre a árvore em ordem e serializa cada pivô junto com os limites
+ * do intervalo do array que ele representa, permitindo uma visualização externa
+ * do estado estrutural da B+ em arquivos de análise.
+ */
 bool json_index(B_tree* root, FILE* output_file) {
 
     if (root == NULL) {
@@ -598,7 +608,12 @@ bool json_index(B_tree* root, FILE* output_file) {
     return true;
 }
 
-// Realiza a exportação dos dados para json
+/*
+ * Realiza a exportação dos dados em formato JSON.
+ * O arquivo gerado inclui o instante em que a exportação foi feita, o estado
+ * atual do array, o conteúdo da árvore de índices e a carga restante da energia,
+ * proporcionando um snapshot completo da estrutura para análise ou comparação.
+ */
 bool export_json(char * buffer, B_tree_plus * b_tree_plus) {
     buffer[BUFFER_SIZE-6] = '\0';
     FILE* output_file = fopen(strcat(buffer,".json"),"a+");
@@ -627,7 +642,11 @@ bool export_json(char * buffer, B_tree_plus * b_tree_plus) {
     return true;
 }
 
-// Realiza a exportação dos dados para txt
+/*
+ * Realiza a exportação dos dados em formato textual.
+ * A rotina grava uma visão legível do array, da árvore de índice e do estado
+ * atual da sessão, incluindo o ticket de exportação e o valor de energia ativo.
+ */
 bool export_text(char * buffer, B_tree_plus * b_tree_plus, int ticket) {
     buffer[BUFFER_SIZE-5] = '\0';
     FILE* output_file = fopen(strcat(buffer,".txt"),"a+");
@@ -651,6 +670,14 @@ bool export_text(char * buffer, B_tree_plus * b_tree_plus, int ticket) {
     return true;
 }
 
+/*
+ * Função principal do programa.
+ *
+ * O fluxo principal cria e inicializa a estrutura em memória, monta o menu
+ * interativo para operação do usuário e coordena inserções, remoções, buscas e
+ * exportações. Também aceita argumentos opcionais para configurar a energia
+ * disponível e o comportamento do programa durante a execução.
+ */
 int main(int argc, char *argv[]) {
 
     #ifdef MASSIVE_TEST

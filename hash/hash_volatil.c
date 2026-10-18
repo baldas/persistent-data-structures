@@ -12,6 +12,11 @@
  * A hash organiza os dados em posições calculadas por uma função de espalhamento, e, em
  * caso de colisão, a busca continua linearmente até encontrar um slot livre ou o elemento
  * correspondente. O array `occupied` funciona como um marcador de estado de cada posição.
+ *
+ * Esse arquivo funciona como uma versão volátil da tabela hash persistente do projeto.
+ * Ele mantém a mesma lógica estrutural, mas utiliza `malloc`/`calloc` em memória RAM, sem
+ * depender do PMDK. Isso facilita testes locais, experimentos e comparação entre os dois
+ * comportamentos: persistente e em memória principal.
  */
 
 #include <stdio.h>
@@ -40,6 +45,9 @@ int lifetime = DEFAULT;
  * Pode ser adaptada para armazenar outros campos ou ponteiros, desde que as funções de
  * cópia, comparação e limpeza também sejam ajustadas. Neste caso, o registro contém apenas
  * um inteiro `num`, o que mantém o exemplo simples e didático.
+ *
+ * A ideia é manter o menor tipo possível para demonstrar a lógica da hash, sem ocultar o
+ * mecanismo principal: cálculo do hash, sondagem linear, marcação de ocupação e expansão.
  */
 typedef struct {
     int num;
@@ -99,6 +107,9 @@ DATA* add_data(DATA* dest, DATA* origin) {
  * A tabela funciona como um conjunto de slots, onde cada slot pode apontar para um registro
  * ou permanecer NULL. O vetor `occupied` separa o conceito de slot "vazio" do slot "ocupado
  * por um registro removido logicamente".
+ *
+ * A estratégia escolhida é a de tabela hash aberta com sonda linear: quando ocorre colisão,
+ * o algoritmo tenta a próxima posição disponível até encontrar uma vaga ou uma chave igual.
  */
 typedef struct {
 
@@ -114,6 +125,9 @@ typedef struct {
  * Ponteiro global para a tabela hash ativa.
  * Como a implementação é feita em um único programa interativo, manter a estrutura em uma
  * variável global simplifica o acesso e a manipulação em todas as funções.
+ *
+ * Essa escolha facilita a interação com o menu principal, onde as operações de inserir,
+ * buscar, remover e exportar precisam acessar o mesmo objeto em vários pontos do código.
  */
 HASH* hash = NULL;
 
@@ -137,6 +151,10 @@ void display();
  * A chave é o valor numérico do registro e o cálculo simples (dado * dado) % max_size
  * produz um índice inicial para a tabela. Em caso de colisão, a implementação continua
  * linearmente até encontrar uma posição adequada.
+ *
+ * Neste exemplo, a função é propositalmente simples para manter o código legível e didático.
+ * Em aplicações reais, poderia ser substituída por uma função mais robusta ou por uma chave
+ * combinada em múltiplos campos.
  */
 int hash_function(DATA* data) {
     return (data->num * data->num) % hash->max_size;
@@ -146,6 +164,10 @@ int hash_function(DATA* data) {
  * Retorna a taxa de ocupação da tabela (load factor).
  * Esse valor é comparado com os limites EXPAND_RATE e REDUCTION_RATE para decidir se a hash
  * precisa crescer ou diminuir.
+ *
+ * A carga influencia diretamente a eficiência: quanto maior a taxa, mais colisões tendem a
+ * acontecer; por isso o código faz o redimensionamento automático para manter a estrutura
+ * em um intervalo aceitável.
  */
 double hash_rate() {
     return (((double) hash->size) / ((double) hash->max_size)) * FULL;
@@ -155,6 +177,8 @@ double hash_rate() {
  * Inicializa a tabela hash.
  * Cria o objeto HASH, define a capacidade inicial e aloca os arrays de dados e flags de
  * ocupação. Todos os slots começam vazios e, assim, prontos para receber registros.
+ *
+ * A função é chamada no início da execução e também após um reset da estrutura.
  */
 void start_hash() {
 
@@ -510,7 +534,9 @@ void display(FILE* output_file) {
     }
 }
 
-// Exporta o conteúdo do array para o json
+// Exporta o conteúdo do array em formato JSON.
+// Cada posição do vetor é convertida em uma string representando o valor ativo,
+// o tombstone (marcado como removido) ou o slot vazio.
 bool json_content(FILE* output_file) {
 
     for (int i = 0; i < hash->max_size; i++) {
@@ -530,7 +556,9 @@ bool json_content(FILE* output_file) {
     return true;
 }
 
-// Realiza a exportação dos dados para json
+// Realiza a exportação dos dados para um arquivo JSON.
+// Além do conteúdo da tabela, o arquivo registra o horário atual e a carga de
+// energia (lifetime), mantendo um histórico de exportações em disco.
 bool export_json(char * buffer) {
     buffer[BUFFER_SIZE-6] = '\0';
     FILE* output_file = fopen(strcat(buffer,".json"),"a+");
@@ -548,7 +576,9 @@ bool export_json(char * buffer) {
     return true;
 }
 
-// Realiza a exportação dos dados para txt
+// Realiza a exportação dos dados para um arquivo texto.
+// O arquivo inclui ticket, horário da exportação, estado atual da energia e
+// representação visual da tabela em blocos de 8 posições.
 bool export_text(char * buffer, int ticket) {
     buffer[BUFFER_SIZE-5] = '\0';
     FILE* output_file = fopen(strcat(buffer,".txt"),"a+");
@@ -569,6 +599,11 @@ bool export_text(char * buffer, int ticket) {
     return true;
 }
 
+// Programa principal.
+//
+// O menu interativo permite inserir, remover, buscar e exportar dados da tabela
+// hash. Também oferece funções avançadas como reset da estrutura, energia
+// (lifetime), remoção por posição e restauração de itens marcados como removidos.
 int main(int argc, char *argv[]) {
 
     #ifdef MASSIVE_TEST

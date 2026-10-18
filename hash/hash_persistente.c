@@ -1,7 +1,13 @@
-// Hash persistente em C usando libpmemobj (Kit de Desenvolvimento de Memória Persistente - PMDK)
-// Este arquivo implementa uma tabela hash aberta com verificação linear
-// e armazenamento persistente via libpmemobj. Comentários adicionados
-// para explicar as principais seções e funções do código.
+// Hash persistente em C usando libpmemobj (PMDK).
+//
+// Este módulo implementa uma tabela hash aberta com endereçamento linear
+// em memória persistente. A estrutura é mantida em um pool PMDK, de modo que
+// o conteúdo e a configuração da tabela sobrevivem a reinicializações do
+// processo e podem ser reabertos em execuções posteriores.
+//
+// A ideia central é manter os arrays de dados e de ocupação no pool, usando
+// transações do libpmemobj para garantir consistência em casos de falha e
+// implementando o redimensionamento automático conforme a taxa de ocupação.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +66,9 @@ struct my_root {
 //  - [n]   : valor n presente e marcado como ocupado
 //  - [!n]  : valor n presente, mas marcado como removido (flag occupied == false)
 //  - [*]   : slot vazio (DEFAULT)
+//
+// A função foi desenhada para facilitar visualização em terminal e exportação
+// para arquivos de texto, sem alterar o estado da estrutura.
 
 POBJ_LAYOUT_BEGIN(HASH);
     POBJ_LAYOUT_ROOT(HASH, struct my_root);
@@ -68,6 +77,10 @@ POBJ_LAYOUT_BEGIN(HASH);
     POBJ_LAYOUT_TOID(HASH, struct hash);
 POBJ_LAYOUT_END(HASH);
 
+// Exibe o conteúdo atual da tabela em uma representação legível.
+// A saída é agrupada em blocos de INITIAL_SIZE posições por linha para que
+// o comportamento da sondagem linear e as posições vazias/removidas fiquem
+// mais fáceis de acompanhar.
 void display(TOID(struct hash) p_aux, FILE* output_file) {
 
   // Exibe a tabela em blocos de INITIAL_SIZE para melhor legibilidade
@@ -100,20 +113,24 @@ void display(TOID(struct hash) p_aux, FILE* output_file) {
 }
 
 // Função de espalhamento (hash). Nesse projeto usa-se uma função simples
-// que calcula (dado * dado) % max_size. Pode ser substituída por outra.
+// que calcula (dado * dado) % max_size. Pode ser substituída por outra
+// estratégia, desde que preserve a propriedade de distribuir os itens pelos
+// slots do vetor de forma consistente.
 int hash_function(int dado, int max_size) {
      int res = (int) (((long long) dado * dado) % max_size);
     return res < 0 ? res + max_size : res; // Garantia contra resultado negativo
 }
 
-// Retorna a taxa de ocupação (load factor) da tabela hash
+// Retorna a taxa de ocupação atual da tabela.
+// O valor é usado para decidir expansão e redução automática da estrutura.
 double hash_rate(TOID(struct hash) p_aux) {
      return (((double) D_RO(p_aux)->size) / ((double) D_RO(p_aux)->max_size)) * FULL;
 }
 
 // Inicializa uma nova tabela hash persistente no pool `pop`.
 // Cria o objeto `struct hash`, aloca os arrays `data` e `occupied` e
-// define todos os slots como DEFAULT / false.
+// define todos os slots como DEFAULT / false. Este passo é executado uma vez
+// por raiz do pool, ou quando a estrutura é reiniciada.
 void start_hash(PMEMobjpool *pop, TOID(struct hash) *p_hash){
 
     TX_BEGIN(pop){
@@ -146,7 +163,8 @@ void start_hash(PMEMobjpool *pop, TOID(struct hash) *p_hash){
 
 // Expande a tabela hash para `new_size` quando a taxa de ocupação ultrapassa
 // EXPAND_RATE. Reinsere elementos no novo array usando a função de hash
-// e verificação linear para resolver colisões.
+// e verificação linear para resolver colisões, preservando a ordem lógica dos
+// elementos em uma tabela aberta.
 void expand_hash(PMEMobjpool *pop, TOID(struct hash) p_aux) {
 
     if (!TOID_IS_NULL(p_aux) && (hash_rate(p_aux) >= EXPAND_RATE)) {
@@ -203,8 +221,9 @@ void expand_hash(PMEMobjpool *pop, TOID(struct hash) p_aux) {
     }
 }
 
-// Reduz a tabela hash quando a taxa de ocupação cair abaixo de REDUCTION_RATE
-// Re-hash para um array menor e transfere somente os elementos ativos.
+// Reduz a tabela hash quando a taxa de ocupação cair abaixo de REDUCTION_RATE.
+// A operação cria um vetor menor e rehasha apenas os elementos ativos,
+// preservando os dados válidos e ajustando a capacidade para a carga atual.
 void reduce_hash(PMEMobjpool *pop, TOID(struct hash) p_aux) {
 
   if (!TOID_IS_NULL(p_aux) && (hash_rate(p_aux) < REDUCTION_RATE) && (D_RO(p_aux)->max_size > INITIAL_SIZE)) {
@@ -256,8 +275,10 @@ void reduce_hash(PMEMobjpool *pop, TOID(struct hash) p_aux) {
   }
 }
 
-// Insere um valor `dado` na tabela usando verificação linear.
-// Retorna true em sucesso e false se a tabela estiver cheia.
+// Insere um valor `dado` na tabela utilizando sondagem linear.
+// A inserção verifica se há espaço suficiente, realiza expansão quando
+// necessário e grava o valor em um slot livre, atualizando também o contador
+// de elementos ocupados da estrutura.
 bool insert (PMEMobjpool *pop, TOID(struct hash) p_aux, int dado){
 
     if (hash_rate(p_aux) >= FULL) {
@@ -298,9 +319,10 @@ bool insert (PMEMobjpool *pop, TOID(struct hash) p_aux, int dado){
     return true;
 }
 
-// Busca a posição de `dado` na tabela. Retorna o índice (0-based) se encontrado
-// ou DEFAULT caso não exista. A busca termina ao encontrar um slot DEFAULT
-// (assumindo que itens além dele não podem pertencer à mesma sequência de verificação)
+// Busca a posição de `dado` na tabela. Retorna o índice (0-based) se
+// encontrado ou DEFAULT caso não exista. A busca segue a mesma sequência de
+// sondagem da inserção e interrompe quando detecta que o percurso completo foi
+// realizado, sem perder o comportamento esperado da tabela aberta.
 int search_value (TOID(struct hash) p_aux, int dado){
 
     if (hash_rate(p_aux) <= EMPTY) {
@@ -326,8 +348,10 @@ int search_value (TOID(struct hash) p_aux, int dado){
     return DEFAULT;
 }
 
-// Remove o elemento na posição (1-based no UI) fornecida pelo usuário.
-// Marca o slot como não-ocupado sem limpar o valor numérico (flag tombstone).
+// Remove o elemento na posição informada pelo usuário (entrada em formato
+// 1-based na interface). A operação marca o slot como vazio em termos de
+// ocupação, mas preserva o valor em memória para permitir restauração futura
+// por meio de uma marca de tombstone.
 bool remove_position (PMEMobjpool *pop, TOID(struct hash) p_aux, int posicao){
 
     if (hash_rate(p_aux) <= EMPTY) {
@@ -369,8 +393,9 @@ bool remove_position (PMEMobjpool *pop, TOID(struct hash) p_aux, int posicao){
     return true;
 }
 
-// Remove todas as ocorrências do valor `dado` marcando os slots como tombstones.
-// Retorna true se ao menos um elemento foi removido.
+// Remove todas as ocorrências do valor `dado` marcando os slots como
+// tombstones. Essa abordagem reusa a lógica de remoção por ocupação e elimina
+// todas as duplicatas encontradas na sequência de sondagem do item.
 bool remove_value (PMEMobjpool *pop, TOID(struct hash) p_aux, int dado){
 
     bool removed = false;
@@ -423,7 +448,9 @@ bool remove_value (PMEMobjpool *pop, TOID(struct hash) p_aux, int dado){
 }
 
 // Restaura (reativa) o slot em `posicao` que ainda contém um valor numérico
-// mas está marcado como removido (tombstone). Entrada é 1-based.
+// mas está marcado como removido (tombstone). A entrada é tratada em formato
+// 1-based pela interface do programa, e a operação apenas reativa a ocupação do
+// slot sem reconstruir a tabela inteira.
 bool restore_position (PMEMobjpool *pop, TOID(struct hash) p_aux, int posicao){
 
     if (posicao < 1 || posicao > D_RO(p_aux)->max_size){
@@ -458,7 +485,9 @@ bool restore_position (PMEMobjpool *pop, TOID(struct hash) p_aux, int posicao){
     return true;
 }
 
-// Reseta a tabela hash: libera estruturas persistentes atuais e cria uma nova
+// Reseta a tabela hash: libera as estruturas persistentes atuais e cria uma
+// nova instância vazia da tabela no mesmo pool. É útil para reiniciar o estado
+// de execução sem excluir o arquivo ou o pool que mantêm os dados persistentes.
 void reset_hash(PMEMobjpool *pop, struct my_root * root) {
 
     TX_BEGIN (pop) {
@@ -482,7 +511,8 @@ void reset_hash(PMEMobjpool *pop, struct my_root * root) {
 
 }
 
-// Exporta o conteúdo do array para o json
+// Exporta o conteúdo do array em formato JSON, preservando a informação de
+// slots vazios, valores ativos e valores marcados como tombstones.
 bool json_content(TOID(struct hash) p_aux, FILE* output_file) {
 
     for (int i = 0; i < D_RO(p_aux)->max_size; i++) {
@@ -503,7 +533,8 @@ bool json_content(TOID(struct hash) p_aux, FILE* output_file) {
     return true;
 }
 
-// Realiza a exportação dos dados para json
+// Realiza a exportação dos dados para um arquivo JSON, acrescentando um
+// timestamp e o estado atual da carga da estrutura no arquivo gerado.
 bool export_json(char * buffer, TOID(struct hash) p_aux) {
     buffer[BUFFER_SIZE-6] = '\0';
     FILE* output_file = fopen(strcat(buffer,".json"),"a+");
@@ -521,7 +552,8 @@ bool export_json(char * buffer, TOID(struct hash) p_aux) {
     return true;
 }
 
-// Realiza a exportação dos dados para txt
+// Realiza a exportação dos dados para um arquivo texto, incluindo a data do
+// ticket, o estado da carga atual e a representação visual da tabela.
 bool export_text(char * buffer, TOID(struct hash) p_aux, int ticket) {
     buffer[BUFFER_SIZE-5] = '\0';
     FILE* output_file = fopen(strcat(buffer,".txt"),"a+");
@@ -542,6 +574,12 @@ bool export_text(char * buffer, TOID(struct hash) p_aux, int ticket) {
     return true;
 }
 
+// Programa principal.
+//
+// O fluxo do menu permite inserir, remover, buscar, resetar, exportar e
+// restaurar itens da tabela hash persistente. O pool PMDK é criado ou aberto
+// no início da execução e a estrutura raiz do pool é usada para manter a hash
+// ao longo do tempo.
 int main(int argc, char *argv[]) {
 
   #ifdef MASSIVE_TEST

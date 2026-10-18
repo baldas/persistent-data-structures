@@ -1,7 +1,14 @@
-// Programa de teste que executa múltiplas instâncias de `arvore_persistente` em
-// paralelo, em lotes do tamanho do número de núcleos lógicos detectados.
-// Cada filho redireciona sua entrada padrão para `test.txt` e chama
-// o executável `./arvore_persistente` via `execvp`.
+/*
+ * Programa de teste responsável por disparar múltiplas execuções da estrutura
+ * B+ em paralelo, agrupando children em lotes com tamanho equivalente ao número
+ * de núcleos lógicos detectados no sistema.
+ *
+ * Cada processo filho redireciona sua entrada padrão para um arquivo de teste e
+ * executa o binário alvo usando execvp, simulando uma carga concorrente sobre as
+ * versões persistente e volátil da árvore. O objetivo principal é validar o
+ * comportamento do programa em cenários de execução simultânea e recuperação de
+ * estado conforme a energia configurada em cada tarefa.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,9 +31,13 @@ typedef struct child_data {
     char pool_name[BUFFER_SIZE];
 } Child;
 
-// Cria e executa a tarefa: chama `./arvore_persistente lifetime id`
-// - id: identificador da tarefa (usado também para compor o nome do pool)
-// - lifetime: argumento passado para controlar o tempo de vida no programa
+/*
+ * Executa a tarefa de um processo filho.
+ *
+ * A rotina monta o nome do binário e os argumentos que serão passados ao
+ * executável por meio de execvp. O parâmetro lifetime controla a energia da
+ * estrutura, enquanto o nome do pool identifica o estado persistente da tarefa.
+ */
 void task(Child * data) {
 
     char lifetime_buffer[BUFFER_SIZE] = "";
@@ -45,6 +56,14 @@ void task(Child * data) {
     }
 }
 
+/*
+ * Código do neto do processo principal.
+ *
+ * O filho cria um descritor para o arquivo de entrada do cenário de teste,
+ * redireciona STDIN para esse arquivo e, em seguida, executa a tarefa correta.
+ * Essa etapa simula a execução da estrutura em um ambiente controlado de dados
+ * de entrada pré-definidos.
+ */
 void grandchild_code(Child* data) {
     data->input_name[BUFFER_SIZE-5] = '\0';
 
@@ -67,6 +86,14 @@ void grandchild_code(Child* data) {
     exit(EXIT_FAILURE);
 }
 
+/*
+ * Código do processo filho.
+ *
+ * O filho dispara um neto para executar o arquivo de teste e aguarda a sua
+ * conclusão. Se a execução finalizar com sucesso, ele gera um arquivo temporário
+ * de recuperação, redireciona a entrada padrão para esse mock e reinicia a
+ * estrutura para uma segunda execução de recuperação do estado persistente.
+ */
 void child_code(Child * data) {
     printf("[Filho] Processando tarefa #%d (PID: %d) em um core...\n", data->id, data->pid);
 
@@ -120,6 +147,15 @@ void child_code(Child * data) {
     exit(WIFEXITED(status) ? WEXITSTATUS(status) : EXIT_FAILURE);
 }
 
+/*
+ * Função principal.
+ *
+ * O processo pai detecta o número de núcleos lógicos disponíveis, define o lote
+ * máximo de execuções concorrentes e inicia um conjunto de tarefas em sequência,
+ * variando entre executáveis, arquivos de teste e valores de lifetime. O objetivo
+ * é gerar paralelismo controlado e validar a robustez da estrutura em cenários
+ * de múltiplos processos simultâneos.
+ */
 int main(int argc, char* argv[]) {
 
     // Detecta número de núcleos lógicos disponíveis para determinar

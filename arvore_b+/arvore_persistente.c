@@ -4,9 +4,9 @@
 // é usada para localizar intervalos de valores em um vetor ordenado, reduzindo a
 // busca linear ao longo da estrutura de índices.
 //
-// O projeto mantém o estado principal em objetos PMDK e usa transações
-// (`TX_BEGIN` / `TX_END`) para garantir consistência persistente em um pool
-// persistente do tipo libpmemobj.
+// Os dados principais são preservados em um pool do tipo libpmemobj e todas as
+// alterações estruturais são realizadas dentro de blocos TX_BEGIN / TX_END para
+// garantir atomicidade das operações críticas.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,10 +16,11 @@
 #include <ctype.h>
 #include <time.h>
 
-// Inclusão da biblioteca para programação em memória persistente (PMDK)
+// Inclusão da biblioteca para programação em memória persistente (PMDK).
 #include <libpmemobj.h>
 
-// Configurações de buffers e da árvore B+
+// Configurações gerais do buffer, da árvore e do comportamento de expansão/
+// redução do array persistente.
 #define BUFFER_SIZE 64
 #define DEFAULT INT_MIN
 #define INITIAL_SIZE 8
@@ -27,7 +28,7 @@
 #define EXPAND_RATE 0.75
 #define REDUCTION_RATE (EXPAND_RATE / SIZE_RATE)
 
-// Configurações do pool persistente
+// Parâmetros do pool persistente e do layout usado pelo PMDK.
 #define LAYOUT_NAME "BTREEPLUS"
 #define KB 1024ULL
 #define MB (1024ULL * KB)
@@ -39,11 +40,12 @@
 int lifetime = DEFAULT;
 char pool_name[BUFFER_SIZE] = "default";
 
-// Definição das estruturas de dados persistentes.
-// `struct array` mantém o estado do array persistente armazenado no pool.
-// - size: número de elementos atualmente ocupados
-// - max_size: capacidade atual do array
-// - data: array persistente de inteiros armazenados
+// Definição do array persistente que guarda os valores reais da estrutura.
+//
+// A estrutura mantém o controle do número atual de elementos, da capacidade
+// total do vetor e do ponteiro persistente para os dados em si. O uso de
+// TOID(int) permite que o arranjo seja alocado dentro do pool PMDK e, portanto,
+// sobreviva a reinicializações do processo sem perder a persistência.
 struct array {
     int size;
     int max_size;
@@ -52,19 +54,18 @@ struct array {
 
 typedef struct array Array;
 
-// `my_root` é o root object do pool PMEM e aponta para o array persistente
-// que guarda os dados da árvore B+.
+// Root object do pool PMDK. Ele aponta para o array persistente principal, que
+// representa o estado atual do conjunto de dados da árvore B+.
 struct my_root {
     TOID(struct array) p_array;
 };
 
 // `B_tree` representa um nó da árvore de índices B+.
-// - value: valor usado para particionar o intervalo de dados
-// - left/right: subárvores esquerda e direita
-// - array_left/array_right: faixa do array associada ao nó
 //
-// A árvore não armazena todos os dados diretamente; ela organiza índices que
-// apontam para blocos do array persistente.
+// Cada nó guarda um valor de referência para particionar o intervalo do array,
+// além dos limites da faixa associada ao nó. A árvore não armazena todos os
+// dados diretamente; ela organiza índices que apontam para blocos do vetor
+// persistente, reduzindo a busca por subintervalos.
 typedef struct b_tree {
     int value;
     struct b_tree* left;
@@ -73,8 +74,8 @@ typedef struct b_tree {
     int array_right;
 } B_tree;
 
-// `B_tree_plus` é o conjunto formado pela árvore de índices e pelo array
-// persistente que contém os dados reais.
+// `B_tree_plus` reúne a árvore de índices e o array persistente, formando a
+// estrutura completa da B+ utilizada pelo programa.
 typedef struct {
     struct b_tree* index;
     TOID(struct array) content;
@@ -617,7 +618,8 @@ bool json_index(B_tree* root, FILE* output_file) {
     return true;
 }
 
-// Realiza a exportação dos dados para json
+// Exporta o estado atual da estrutura em formato JSON para permitir registro,
+// visualização externa e comparação entre snapshots da árvore e do array.
 bool export_json(char * buffer, B_tree_plus * b_tree_plus) {
     buffer[BUFFER_SIZE-6] = '\0';
     FILE* output_file = fopen(strcat(buffer,".json"),"a+");
@@ -646,7 +648,8 @@ bool export_json(char * buffer, B_tree_plus * b_tree_plus) {
     return true;
 }
 
-// Realiza a exportação dos dados para txt
+// Exporta o estado atual em formato de texto, incluindo o conteúdo do array e a
+// representação dos nós da árvore para inspeção manual por testes ou análises.
 bool export_text(char * buffer, B_tree_plus * b_tree_plus, int ticket) {
     buffer[BUFFER_SIZE-5] = '\0';
     FILE* output_file = fopen(strcat(buffer,".txt"),"a+");
@@ -671,9 +674,12 @@ bool export_text(char * buffer, B_tree_plus * b_tree_plus, int ticket) {
 }
 
 // Programa principal da árvore B+ persistente.
+//
 // O fluxo de execução cria ou abre um pool PMDK, inicializa o array persistente,
-// montando a árvore de índices e apresenta um menu interativo para inserção,
-// remoção, busca, exportação e reset do conjunto de dados.
+// reconstrói a árvore de índices conforme o conteúdo carregado e apresenta um
+// menu interativo para inserção, remoção, busca, exportação e reset do conjunto
+// de dados. Esse ponto centraliza o ciclo de vida do objeto persistente e a
+// interação do usuário com a estrutura.
 int main(int argc, char *argv[]) {
 
     #ifdef MASSIVE_TEST
