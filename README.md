@@ -22,7 +22,7 @@ estruturas-persistentes/
 │   ├── hash_volatil.c
 │   ├── multi_test.c
 │   ├── Makefile
-│   ├── test.txt
+│   ├── Testes
 │   └── README.md
 ├── arvore_b+/
 │   └── ...
