@@ -23,6 +23,8 @@ persistent: hash_persistente
 
 massive_test: hash_persistente.c veryclean
 	mkdir -p Pools
+	mkdir -p Resultados
+	mkdir -p Testes
 	$(CC) $(CFLAGS) -DMASSIVE_TEST hash_persistente.c -o hash_persistente $(LDFLAGS)
 	$(CC) $(CFLAGS) -DMASSIVE_TEST hash_volatil.c -o hash_volatil $(LDFLAGS) 
 	$(CC) $(CFLAGS) multi_test.c -o multi_test
@@ -32,4 +34,5 @@ clean:
 	rm -f hash_persistente hash_volatil multi_test
 
 veryclean: clean
-	rm -f *~ Pools
+	rm -f *~
+	rm -rf Pools

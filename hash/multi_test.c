@@ -130,7 +130,7 @@ void child_code(Child * data) {
             perror("Erro ao escrever o arquivo de entrada para a recuperação.");
             exit(EXIT_FAILURE);
         }
-        fprintf(fp,"41\n./Resultados/%s\n",data->pool_name);
+        fprintf(fp,"41\n./Resultados/%s\n5\n",data->pool_name);
         fclose(fp);
 
         int arquivo_fd = open(name_buffer, O_RDONLY);
@@ -147,7 +147,7 @@ void child_code(Child * data) {
 
         close(arquivo_fd);
 
-        remove(name_buffer)
+        remove(name_buffer);
 
         task(data);
     }

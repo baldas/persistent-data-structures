@@ -43,6 +43,13 @@
 int lifetime = DEFAULT;
 char pool_name[BUFFER_SIZE] = "default";
 
+POBJ_LAYOUT_BEGIN(HASH);
+    POBJ_LAYOUT_ROOT(HASH, struct my_root);
+    POBJ_LAYOUT_TOID(HASH, int);
+    POBJ_LAYOUT_TOID(HASH, char);
+    POBJ_LAYOUT_TOID(HASH, struct hash);
+POBJ_LAYOUT_END(HASH);
+
 // Definição das estruturas de dados persistentes.
 // `struct hash` mantém o estado da tabela hash (persistido no pool).
 // - size: número de elementos atualmente marcados como ocupados
@@ -69,13 +76,6 @@ struct my_root {
 //
 // A função foi desenhada para facilitar visualização em terminal e exportação
 // para arquivos de texto, sem alterar o estado da estrutura.
-
-POBJ_LAYOUT_BEGIN(HASH);
-    POBJ_LAYOUT_ROOT(HASH, struct my_root);
-    POBJ_LAYOUT_TOID(HASH, int);
-    POBJ_LAYOUT_TOID(HASH, char);
-    POBJ_LAYOUT_TOID(HASH, struct hash);
-POBJ_LAYOUT_END(HASH);
 
 // Exibe o conteúdo atual da tabela em uma representação legível.
 // A saída é agrupada em blocos de INITIAL_SIZE posições por linha para que
@@ -540,13 +540,17 @@ bool export_json(char * buffer, TOID(struct hash) p_aux) {
     FILE* output_file = fopen(strcat(buffer,".json"),"a+");
     time_t currentTime = time(NULL);
 
-    fprintf(output_file, "{\n\"time\":\"%s\",\n", ctime(&currentTime));
+    char buffer_time[BUFFER_SIZE];
+    struct tm *info_tempo = localtime(&currentTime);
+    strftime(buffer_time, sizeof(buffer_time), "%A, %d/%m/%Y - %H:%M:%S", info_tempo);
+
+    fprintf(output_file, "{\n\"time\":\"%s\",\n", buffer_time);
 
     fprintf(output_file, "\"charge\": \"%d\",\n",lifetime);
 
-    fprintf(output_file, "\"content\":[\n");
+    fprintf(output_file, "\"content\":[");
     json_content(p_aux, output_file); 
-    fprintf(output_file, "],\n");
+    fprintf(output_file, "]\n}\n");
 
     fclose(output_file);
     return true;

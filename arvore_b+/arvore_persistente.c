@@ -40,6 +40,12 @@
 int lifetime = DEFAULT;
 char pool_name[BUFFER_SIZE] = "default";
 
+POBJ_LAYOUT_BEGIN(BTREEPLUS);
+    POBJ_LAYOUT_ROOT(BTREEPLUS, struct my_root);
+    POBJ_LAYOUT_TOID(BTREEPLUS, struct array);
+    POBJ_LAYOUT_TOID(BTREEPLUS, int);
+POBJ_LAYOUT_END(BTREEPLUS);
+
 // Definição do array persistente que guarda os valores reais da estrutura.
 //
 // A estrutura mantém o controle do número atual de elementos, da capacidade
@@ -81,12 +87,6 @@ typedef struct {
     TOID(struct array) content;
 } B_tree_plus;
 
-POBJ_LAYOUT_BEGIN(BTREEPLUS);
-    POBJ_LAYOUT_ROOT(BTREEPLUS, struct my_root);
-    POBJ_LAYOUT_TOID(BTREEPLUS, struct array);
-    POBJ_LAYOUT_TOID(BTREEPLUS, int);
-POBJ_LAYOUT_END(BTREEPLUS);
-
 bool delete_b_tree(B_tree** root);
 
 // Inicializa a árvore de índices em memória volátil.
@@ -95,7 +95,7 @@ bool delete_b_tree(B_tree** root);
 bool init_b_tree(B_tree** root) {
 
     if ((*root) != NULL) {
-        delete_b_tree(*root);
+        delete_b_tree(root);
     }
 
     (*root) = malloc(sizeof(B_tree));
@@ -625,15 +625,19 @@ bool export_json(char * buffer, B_tree_plus * b_tree_plus) {
     FILE* output_file = fopen(strcat(buffer,".json"),"a+");
     time_t currentTime = time(NULL);
 
-    fprintf(output_file, "{\n\"time\":\"%s\",\n", ctime(&currentTime));
+    char buffer_time[BUFFER_SIZE];
+    struct tm *info_tempo = localtime(&currentTime);
+    strftime(buffer_time, sizeof(buffer_time), "%A, %d/%m/%Y - %H:%M:%S", info_tempo);
+
+    fprintf(output_file, "{\n\"time\":\"%s\",\n", buffer_time);
 
     fprintf(output_file, "\"charge\": \"%d\",\n",lifetime);
 
-    fprintf(output_file, "\"content\":[\n");
+    fprintf(output_file, "\"content\":[");
     json_content(b_tree_plus->content, output_file); 
     fprintf(output_file, "],\n");
 
-    fprintf(output_file, "\"index\":[");
+    fprintf(output_file, "\"index\":[\n");
     json_index(b_tree_plus->index->left, output_file);
     json_index(b_tree_plus->index->right, output_file);
 
@@ -642,7 +646,7 @@ bool export_json(char * buffer, B_tree_plus * b_tree_plus) {
     else
         fprintf(output_file, "{\"value\": \"**\", \"left\": \"%d\", \"right\": \"%d\"}", b_tree_plus->index->array_left/(INITIAL_SIZE/SIZE_RATE) + 1, b_tree_plus->index->array_right/(INITIAL_SIZE/SIZE_RATE) + 1);
     
-    fprintf(output_file, "\n]\n}"); 
+    fprintf(output_file, "\n]\n}\n");
 
     fclose(output_file);
     return true;

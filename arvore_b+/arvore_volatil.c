@@ -619,15 +619,19 @@ bool export_json(char * buffer, B_tree_plus * b_tree_plus) {
     FILE* output_file = fopen(strcat(buffer,".json"),"a+");
     time_t currentTime = time(NULL);
 
-    fprintf(output_file, "{\n\"time\":\"%s\",\n", ctime(&currentTime));
+    char buffer_time[BUFFER_SIZE];
+    struct tm *info_tempo = localtime(&currentTime);
+    strftime(buffer_time, sizeof(buffer_time), "%A, %d/%m/%Y - %H:%M:%S", info_tempo);
+
+    fprintf(output_file, "{\n\"time\":\"%s\",\n", buffer_time);
 
     fprintf(output_file, "\"charge\": \"%d\",\n",lifetime);
 
-    fprintf(output_file, "\"content\":[\n");
+    fprintf(output_file, "\"content\":[");
     json_content(b_tree_plus->content, output_file); 
     fprintf(output_file, "],\n");
 
-    fprintf(output_file, "\"index\":[");
+    fprintf(output_file, "\"index\":[\n");
     json_index(b_tree_plus->index->left, output_file);
     json_index(b_tree_plus->index->right, output_file);
 
@@ -636,7 +640,7 @@ bool export_json(char * buffer, B_tree_plus * b_tree_plus) {
     else
         fprintf(output_file, "{\"value\": \"**\", \"left\": \"%d\", \"right\": \"%d\"}", b_tree_plus->index->array_left/(INITIAL_SIZE/SIZE_RATE) + 1, b_tree_plus->index->array_right/(INITIAL_SIZE/SIZE_RATE) + 1);
 
-    fprintf(output_file, "\n]\n}"); 
+    fprintf(output_file, "\n]\n}\n"); 
 
     fclose(output_file);
     return true;

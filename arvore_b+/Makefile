@@ -23,6 +23,8 @@ persistent: arvore_persistente
 
 massive_test: arvore_persistente.c arvore_volatil.c veryclean
 	mkdir -p Pools
+	mkdir -p Resultados
+	mkdir -p Testes
 	$(CC) $(CFLAGS) -DMASSIVE_TEST arvore_persistente.c  -o arvore_persistente $(LDFLAGS)
 	$(CC) $(CFLAGS) -DMASSIVE_TEST arvore_volatil.c -o arvore_volatil $(LDFLAGS)
 	$(CC) $(CFLAGS) multi_test.c -o multi_test
@@ -32,4 +34,5 @@ clean:
 	rm -f arvore_persistente arvore_volatil multi_test
 
 veryclean: clean
-	rm -f *~ Pools
+	rm -f *~
+	rm -rf Pools

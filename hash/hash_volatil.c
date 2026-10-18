@@ -564,13 +564,17 @@ bool export_json(char * buffer) {
     FILE* output_file = fopen(strcat(buffer,".json"),"a+");
     time_t currentTime = time(NULL);
 
-    fprintf(output_file, "{\n\"time\":\"%s\",\n", ctime(&currentTime));
+    char buffer_time[BUFFER_SIZE];
+    struct tm *info_tempo = localtime(&currentTime);
+    strftime(buffer_time, sizeof(buffer), "%A, %d/%m/%Y - %H:%M:%S", info_tempo);
+
+    fprintf(output_file, "{\n\"time\":\"%s\",\n", buffer_time);
 
     fprintf(output_file, "\"charge\": \"%d\",\n",lifetime);
 
     fprintf(output_file, "\"content\":[\n");
     json_content(output_file);
-    fprintf(output_file, "],\n");
+    fprintf(output_file, "]\n}\n");
 
     fclose(output_file);
     return true;
