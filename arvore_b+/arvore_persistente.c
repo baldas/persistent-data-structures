@@ -588,9 +588,9 @@ bool json_content(TOID(struct array) array, FILE* output_file) {
     for (int i = 0; i < D_RO(array)->max_size; i++) {
 
         if (D_RO(D_RO(array)->data)[i] == DEFAULT) {
-            fprintf(output_file, "\"**\", ");
+            fprintf(output_file, "\"**\"");
         } else {
-            fprintf(output_file,"\"%d\", ", D_RO(D_RO(array)->data)[i]);
+            fprintf(output_file,"\"%d\"", D_RO(D_RO(array)->data)[i]);
         }
 
         if (!(i == D_RO(array)->max_size -1))
