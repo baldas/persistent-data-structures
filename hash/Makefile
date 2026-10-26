@@ -22,6 +22,7 @@ persistent: hash_persistente
 	./hash_persistente
 
 massive_test: hash_persistente.c veryclean
+	mkdir -p /mnt/pmem0/hash
 	mkdir -p Resultados
 	mkdir -p Testes
 	$(CC) $(CFLAGS) -DMASSIVE_TEST hash_persistente.c -o hash_persistente $(LDFLAGS)
@@ -34,4 +35,4 @@ clean:
 
 veryclean: clean
 	rm -f *~
-	rm -f /mnt/pmem0/*.obj
+	rm -rf /mnt/pmem0/hash

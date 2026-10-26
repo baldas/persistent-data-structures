@@ -22,6 +22,7 @@ persistent: arvore_persistente
 	./arvore_persistente
 
 massive_test: arvore_persistente.c arvore_volatil.c veryclean
+	mkdir -p /mnt/pmem0/b_plus
 	mkdir -p Resultados
 	mkdir -p Testes
 	$(CC) $(CFLAGS) -DMASSIVE_TEST arvore_persistente.c  -o arvore_persistente $(LDFLAGS)
@@ -34,4 +35,4 @@ clean:
 
 veryclean: clean
 	rm -f *~
-	rm -f /mnt/pmem0/*.obj
+	rm -rf /mnt/pmem0/b_plus
