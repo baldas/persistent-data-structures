@@ -22,7 +22,7 @@ persistent: hash_persistente
 	./hash_persistente
 
 massive_test: hash_persistente.c veryclean
-	mkdir -p Pools
+	mkdir -p /mnt/pmem0/hash/
 	mkdir -p Resultados
 	mkdir -p Testes
 	$(CC) $(CFLAGS) -DMASSIVE_TEST hash_persistente.c -o hash_persistente $(LDFLAGS)
@@ -35,4 +35,4 @@ clean:
 
 veryclean: clean
 	rm -f *~
-	rm -rf Pools
+	rm -rf /mnt/pmem0/hash/

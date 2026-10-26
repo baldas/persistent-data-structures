@@ -37,7 +37,7 @@
 #define MB (1024ULL * KB)
 #define GB (1024ULL * MB)
 #define POOL_SIZE PMEMOBJ_MIN_POOL
-#define POOL_NAME "./Pools/"
+#define POOL_NAME "/mnt/pmem0/hash/"
 
 // Inicialização de variáveis e do pool
 int lifetime = DEFAULT;
