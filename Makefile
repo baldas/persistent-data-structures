@@ -9,8 +9,9 @@ all: massive_test
 
 massive_test:
 	$(MAKE) -C $(DIR_HASH) massive_test
-	$(MAKE) -C $(DIR_HASH) massive_test
+	$(MAKE) -C $(DIR_HASH) veryclean
 	$(MAKE) -C $(DIR_ARVORE) massive_test
+	$(MAKE) -C $(DIR_ARVORE) veryclean
 
 clean:
 	$(MAKE) -C $(DIR_HASH) clean
