@@ -186,6 +186,11 @@ void start_hash() {
         hash = (HASH*) malloc(sizeof(HASH));
         hash->size = 0;
         hash->max_size = INITIAL_SIZE;
+        if (lifetime != DEFAULT) {
+            if (lifetime == 0)
+                exit(0);
+            lifetime--;
+        }
         hash->data = calloc(INITIAL_SIZE, sizeof(DATA*));
         hash->occupied = calloc(INITIAL_SIZE, sizeof(bool));
     }
@@ -325,6 +330,13 @@ bool insert_data(DATA* data) {
                 copy_data(hash->data[position], data);
             }
 
+            // Controle de tempo de vida (opcional)
+            if (lifetime != DEFAULT) {
+                if (lifetime == 0)
+                    exit(0);
+                lifetime--;
+            }
+
             // Atualiza a flag de ocupação e a contagem de itens no hash
             hash->occupied[position] = true;
             hash->size = hash->size + 1;
@@ -352,6 +364,11 @@ bool remove_position(int position) {
         // Caso esteja ocupado, remove logicamente
         if (hash->occupied[position]) {
             hash->occupied[position] = false;
+            if (lifetime != DEFAULT) {
+                if (lifetime == 0)
+                    exit(0);
+                lifetime--;
+            }
             hash->size = hash->size - 1;
             return true;
         }
@@ -367,6 +384,8 @@ bool remove_position(int position) {
  */
 bool remove_data(DATA* data) {
 
+    bool removed = false;
+
     if (hash != NULL) {
 
         // Se tiver itens, tenta remover
@@ -381,6 +400,12 @@ bool remove_data(DATA* data) {
                 if ((compare_data(hash->data[position], data) == 0) && (hash->occupied[position])) {
                     hash->occupied[position] = false;
                     hash->size = hash->size - 1;
+                    if (!removed && lifetime != DEFAULT) {
+                        if (lifetime == 0)
+                            exit(0);
+                        lifetime--;
+                    }
+                    removed = true;
                 }
                 
                 position = position + 1;
@@ -391,14 +416,12 @@ bool remove_data(DATA* data) {
             while ((hash_rate() < REDUCTION_RATE) && (hash->max_size > INITIAL_SIZE))
                 reduce_hash();
 
-            return true;
-
         } else {
             fprintf(stderr, "\n<--Hash vazio-->\n");
         }
     }
 
-    return false;
+    return removed;
 }
 
 /*
@@ -435,6 +458,11 @@ bool delete_data(int position) {
 bool restore_position(int position) {
     if ((hash != NULL) && ((position >= 0) && (position < hash->max_size)) && (hash->data[position] != NULL) && (!hash->occupied[position])) {
         hash->occupied[position] = true;
+        if (lifetime != DEFAULT) {
+            if (lifetime == 0)
+                exit(0);
+            lifetime--;
+        }
         hash->size = hash->size + 1;
         return true;
     }
@@ -736,6 +764,12 @@ int main(int argc, char *argv[]) {
 
                     case 2: // Caso de reset da estrutura
                         end_hash();
+                        if (lifetime != DEFAULT) {
+                            if (lifetime == 0)
+                                exit(0);
+                            lifetime--;
+                        }
+                        
                         start_hash();
                         printf("\nHash reseted!");
                         break;
