@@ -1,7 +1,34 @@
 import json
 import re
-
+from itertools import groupby
 import pandas as pd
+import dataframe_image as dfi
+
+def formatar_vetor(lista):
+    if not isinstance(lista, list):
+        return str(lista)
+    
+    if not lista:
+        return "[]"
+
+    resultado = []
+    
+    # Agrupa elementos consecutivos testando se o valor é '**'
+    for e_asterisco, grupo in groupby(lista, key=lambda x: str(x) == '**'):
+        itens = list(grupo)
+        if e_asterisco:
+            qtd = len(itens)
+            if qtd > 1:
+                resultado.append(f"** x{qtd}")
+            else:
+                resultado.append("**")
+        else:
+            for item in itens:
+                resultado.append(str(item).replace("'", ""))
+
+    return "[" + ", ".join(resultado) + "]"
+
+
 colunas = ["teste 1", "teste 2", "teste 3", "teste 4"]
 linhas = ["arvore_persistente", "arvore_volatil", "hash_persistente", "hash_volatil"]
 df = pd.DataFrame(index=linhas, columns=colunas)
@@ -24,7 +51,7 @@ for caminho, conteudo in dados.items():
     if isinstance(conteudo, dict):
         tem_dados = any(re.search(r'\d', str(item)) for item in conteudo["content"])
 
-        df.loc[tipo_arquivo, tipo_teste] = conteudo["content"]
+        df.loc[tipo_arquivo, tipo_teste] = formatar_vetor(conteudo["content"])
 
 df_estilizado = (
     df.style
@@ -54,6 +81,4 @@ df_estilizado = (
     ])
 )
 
-
-import dataframe_image as dfi
 dfi.export(df_estilizado, "structures_vs_tests.png")
