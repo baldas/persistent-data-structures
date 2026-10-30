@@ -51,7 +51,8 @@ for caminho, conteudo in dados.items():
     if isinstance(conteudo, dict):
         tem_dados = any(re.search(r'\d', str(item)) for item in conteudo["content"])
 
-        df.loc[tipo_arquivo, tipo_teste] = formatar_vetor(conteudo["content"])
+        if carga == 2:
+            df.loc[tipo_arquivo, tipo_teste] = formatar_vetor(conteudo["content"])
 
 df_estilizado = (
     df.style
