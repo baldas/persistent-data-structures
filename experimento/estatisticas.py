@@ -4,6 +4,8 @@ from itertools import groupby
 import pandas as pd
 import dataframe_image as dfi
 
+CARGA = 3
+
 def formatar_vetor(lista):
     if not isinstance(lista, list):
         return str(lista)
@@ -51,7 +53,7 @@ for caminho, conteudo in dados.items():
     if isinstance(conteudo, dict):
         tem_dados = any(re.search(r'\d', str(item)) for item in conteudo["content"])
 
-        if carga == 2:
+        if carga == CARGA:
             df.loc[tipo_arquivo, tipo_teste] = formatar_vetor(conteudo["content"])
 
 df_estilizado = (
@@ -82,4 +84,4 @@ df_estilizado = (
     ])
 )
 
-dfi.export(df_estilizado, "structures_vs_tests.png")
+dfi.export(df_estilizado, f"structures_vs_tests_{CARGA}.png")
