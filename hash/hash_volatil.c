@@ -594,7 +594,7 @@ bool export_json(char * buffer) {
 
     char buffer_time[BUFFER_SIZE];
     struct tm *info_tempo = localtime(&currentTime);
-    strftime(buffer_time, sizeof(buffer), "%A, %d/%m/%Y - %H:%M:%S", info_tempo);
+    strftime(buffer_time, sizeof(buffer_time), "%A, %d/%m/%Y - %H:%M:%S", info_tempo);
 
     fprintf(output_file, "{\n\"time\":\"%s\",\n", buffer_time);
 
