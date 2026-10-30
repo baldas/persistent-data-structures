@@ -29,7 +29,6 @@ for caminho, conteudo in dados.items():
 df_estilizado = (
     df.style
     .format(precision=2)                             # Formata números com 2 casas decimais
-    .set_caption("Tabela de Conteúdo das Estruturas (3 Cargas)")  # Título
     .set_table_styles([
         # Estilo do Cabeçalho
         {'selector': 'th', 'props': [
@@ -57,4 +56,4 @@ df_estilizado = (
 
 
 import dataframe_image as dfi
-dfi.export(df_estilizado, "tabela_final.png")
+dfi.export(df_estilizado, "structures_vs_tests.png")
