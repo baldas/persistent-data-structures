@@ -58,7 +58,7 @@ for caminho, conteudo in dados.items():
 
 df_estilizado = (
     df.style
-    .format(precision=2)                             # Formata números com 2 casas decimais
+    .format(precision=2, na_rep="Não inicializado")
     .set_table_styles([
         # Estilo do Cabeçalho
         {'selector': 'th', 'props': [
